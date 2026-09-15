@@ -35,7 +35,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.4'   # Dart 3.8.x — sesuai kebutuhan project
+          flutter-version: '3.47.4'
           cache: true
 
       # ════════════════════════════════════════════════════════════════════════
@@ -61,47 +61,54 @@ jobs:
         run: |
           ANDROID_DIR="android"
 
-          # ── 1. Gradle wrapper → 8.11.1 (WAJIB untuk AGP 8.7+) ──────────────
+          # ── 1. Gradle wrapper → 8.11.1 ──────────────────────────────────────
           WRAPPER="$ANDROID_DIR/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$WRAPPER" ]; then
-            sed -i 's|gradle-[0-9][0-9.]*-[a-z]*\.zip|gradle-8.11.1-bin.zip|g' "$WRAPPER"
+            sed -i -E 's|gradle-[0-9][0-9.]*-[a-z]*\.zip|gradle-8.11.1-bin.zip|g' "$WRAPPER"
             echo "[OK] Gradle wrapper → 8.11.1"
             grep distributionUrl "$WRAPPER"
           fi
 
-          # ── 2. AGP → 8.7.2 & Kotlin → 2.0.20 (Groovy DSL) ──────────────────
-          ROOT_GRADLE="$ANDROID_DIR/build.gradle"
-          if [ -f "$ROOT_GRADLE" ]; then
-            sed -i "s/com\.android\.tools\.build:gradle:[0-9][0-9.]*/com.android.tools.build:gradle:8.7.2/g" "$ROOT_GRADLE"
-            sed -i "s/kotlin_version\s*=\s*['\"][0-9][0-9.]*['\"]/kotlin_version = '2.0.20'/g" "$ROOT_GRADLE"
-            sed -i "s/org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9][0-9.]*/org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.20/g" "$ROOT_GRADLE"
-            echo "[OK] [Groovy] AGP → 8.7.2, Kotlin → 2.0.20"
-          fi
+          # ── 2. Patch versi AGP & Kotlin di SEMUA file gradle ───────────────
+          # Strategi AMAN: hanya ganti ANGKA VERSI, jangan sentuh struktur.
+          # Cari pola:  ...gradle:8.x.x   atau   version "8.x.x"  atau  version '8.x.x'
 
-          # ── 2b. AGP → 8.7.2 & Kotlin → 2.0.20 (Kotlin DSL) ─────────────────
-          ROOT_GRADLE_KTS="$ANDROID_DIR/build.gradle.kts"
-          if [ -f "$ROOT_GRADLE_KTS" ]; then
-            sed -i -E "s|com\.android\.tools\.build:gradle:[0-9.]+|com.android.tools.build:gradle:8.7.2|g" "$ROOT_GRADLE_KTS"
-            sed -i -E "s|org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+|org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.20|g" "$ROOT_GRADLE_KTS"
-            sed -i -E "s|kotlin\(\"android\"\)\s+version\s+\"[0-9.]+\"|kotlin(\"android\") version \"2.0.20\"|g" "$ROOT_GRADLE_KTS"
-            sed -i -E "s|id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\"[0-9.]+\"|id(\"org.jetbrains.kotlin.android\") version \"2.0.20\"|g" "$ROOT_GRADLE_KTS"
-            echo "[OK] [Kotlin DSL] AGP → 8.7.2, Kotlin → 2.0.20"
-            echo "----- isi build.gradle.kts -----"
-            cat "$ROOT_GRADLE_KTS"
-          fi
+          # Kumpulkan semua file gradle yang mungkin berisi versi plugin
+          FILES=""
+          [ -f "$ANDROID_DIR/build.gradle" ]            && FILES="$FILES $ANDROID_DIR/build.gradle"
+          [ -f "$ANDROID_DIR/build.gradle.kts" ]        && FILES="$FILES $ANDROID_DIR/build.gradle.kts"
+          [ -f "$ANDROID_DIR/settings.gradle" ]         && FILES="$FILES $ANDROID_DIR/settings.gradle"
+          [ -f "$ANDROID_DIR/settings.gradle.kts" ]     && FILES="$FILES $ANDROID_DIR/settings.gradle.kts"
 
-          # ── 2c. settings.gradle(.kts) — kadang versi plugin ada di sini ────
-          SETTINGS_GRADLE="$ANDROID_DIR/settings.gradle"
-          SETTINGS_GRADLE_KTS="$ANDROID_DIR/settings.gradle.kts"
-          for F in "$SETTINGS_GRADLE" "$SETTINGS_GRADLE_KTS"; do
-            if [ -f "$F" ]; then
-              sed -i -E "s|com\.android\.application[^\n]*version\s+['\"][0-9.]+['\"]|com.android.application version \"8.7.2\"|g" "$F"
-              sed -i -E "s|com\.android\.library[^\n]*version\s+['\"][0-9.]+['\"]|com.android.library version \"8.7.2\"|g" "$F"
-              sed -i -E "s|org\.jetbrains\.kotlin\.android[^\n]*version\s+['\"][0-9.]+['\"]|org.jetbrains.kotlin.android version \"2.0.20\"|g" "$F"
-              sed -i -E "s|id\(\"com\.android\.application\"\)\s+version\s+\"[0-9.]+\"|id(\"com.android.application\") version \"8.7.2\"|g" "$F"
-              sed -i -E "s|id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\"[0-9.]+\"|id(\"org.jetbrains.kotlin.android\") version \"2.0.20\"|g" "$F"
-              echo "[OK] Patch settings: $F"
-            fi
+          for F in $FILES; do
+            echo "----- Patching $F -----"
+            echo "SEBELUM:"; cat "$F"
+
+            # AGP Groovy: com.android.tools.build:gradle:8.3.2
+            sed -i -E 's|com\.android\.tools\.build:gradle:[0-9]+\.[0-9]+\.[0-9]+|com.android.tools.build:gradle:8.7.2|g' "$F"
+
+            # AGP Kotlin DSL: id("com.android.application") version "8.3.2"
+            # HANYA ganti angka versi di dalam tanda kutip setelah kata 'version'
+            sed -i -E 's|(id\("com\.android\.application"\)[[:space:]]+version[[:space:]]+")[0-9]+\.[0-9]+\.[0-9]+(")|\18.7.2\2|g' "$F"
+            sed -i -E 's|(id\("com\.android\.library"\)[[:space:]]+version[[:space:]]+")[0-9]+\.[0-9]+\.[0-9]+(")|\18.7.2\2|g' "$F"
+
+            # AGP format tanpa tanda kurung: id "com.android.application" version "8.3.2"
+            sed -i -E 's|(id[[:space:]]+"com\.android\.application"[[:space:]]+version[[:space:]]+")[0-9]+\.[0-9]+\.[0-9]+(")|\18.7.2\2|g' "$F"
+            sed -i -E 's|(id[[:space:]]+"com\.android\.library"[[:space:]]+version[[:space:]]+")[0-9]+\.[0-9]+\.[0-9]+(")|\18.7.2\2|g' "$F"
+
+            # Kotlin plugin Groovy: org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24
+            sed -i -E 's|org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9]+\.[0-9]+\.[0-9]+|org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.20|g' "$F"
+            # kotlin_version = '1.9.24'
+            sed -i -E "s|kotlin_version[[:space:]]*=[[:space:]]*['\"][0-9]+\\.[0-9]+\\.[0-9]+['\"]|kotlin_version = '2.0.20'|g" "$F"
+
+            # Kotlin plugin Kotlin DSL: id("org.jetbrains.kotlin.android") version "1.9.24"
+            sed -i -E 's|(id\("org\.jetbrains\.kotlin\.android"\)[[:space:]]+version[[:space:]]+")[0-9]+\.[0-9]+\.[0-9]+(")|\12.0.20\2|g' "$F"
+            sed -i -E 's|(id\("org\.jetbrains\.kotlin\.jvm"\)[[:space:]]+version[[:space:]]+")[0-9]+\.[0-9]+\.[0-9]+(")|\12.0.20\2|g' "$F"
+            # id "org.jetbrains.kotlin.android" version "1.9.24" (tanpa kurung)
+            sed -i -E 's|(id[[:space:]]+"org\.jetbrains\.kotlin\.android"[[:space:]]+version[[:space:]]+")[0-9]+\.[0-9]+\.[0-9]+(")|\12.0.20\2|g' "$F"
+            sed -i -E 's|(id[[:space:]]+"org\.jetbrains\.kotlin\.jvm"[[:space:]]+version[[:space:]]+")[0-9]+\.[0-9]+\.[0-9]+(")|\12.0.20\2|g' "$F"
+
+            echo "SESUDAH:"; cat "$F"
           done
 
           # ── 3. compileSdk / targetSdk — deteksi .gradle & .gradle.kts ──────
@@ -142,7 +149,6 @@ jobs:
             # Java 17
             sed -i 's/JavaVersion\.VERSION_1_[0-9]\+/JavaVersion.VERSION_17/g'      "$APP_GRADLE"
             sed -i 's/JavaVersion\.VERSION_[0-9]\+/JavaVersion.VERSION_17/g'        "$APP_GRADLE"
-            # Kotlin DSL: jvmTarget = "17"
             sed -i 's/jvmTarget\s*=\s*"[0-9.]*"/jvmTarget = "17"/g'                 "$APP_GRADLE"
             sed -i 's/jvmTarget\s*=\s*JavaVersion\.VERSION_[0-9_]\+/jvmTarget = JavaVersion.VERSION_17/g' "$APP_GRADLE"
 
@@ -164,13 +170,11 @@ jobs:
             echo "[INFO] pubspec sdk constraint SEBELUM:"
             grep -E "^\s*sdk:" "$PUBSPEC" | head -3
 
-            # Ganti semua bentuk constraint jadi >=3.8.0 <4.0.0
             sed -i -E "s|sdk:\s*['\"]>=[0-9.]+\s*<[0-9.]+\s*['\"]|sdk: '>=3.8.0 <4.0.0'|g" "$PUBSPEC"
             sed -i -E "s|sdk:\s*['\"]\^[0-9.]+['\"]|sdk: '>=3.8.0 <4.0.0'|g"              "$PUBSPEC"
             sed -i -E "s|sdk:\s*['\"]>=[0-9.]+['\"]|sdk: '>=3.8.0 <4.0.0'|g"              "$PUBSPEC"
 
             echo "[OK] pubspec sdk constraint → >=3.8.0 <4.0.0"
-            echo "[INFO] pubspec sdk constraint SESUDAH:"
             grep -E "^\s*sdk:" "$PUBSPEC" | head -3
           fi
 
@@ -196,7 +200,7 @@ jobs:
           grep distributionUrl android/gradle/wrapper/gradle-wrapper.properties || true
           echo "===== build.gradle.kts (root) ====="
           cat android/build.gradle.kts 2>/dev/null || cat android/build.gradle 2>/dev/null || true
-          echo "===== settings.gradle(.kts) ====="
+          echo "===== settings.gradle.kts ====="
           cat android/settings.gradle.kts 2>/dev/null || cat android/settings.gradle 2>/dev/null || true
 
       - name: "[ZIP] Flutter pub get"
