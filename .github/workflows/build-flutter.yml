@@ -39,7 +39,7 @@ jobs:
           cache: true
 
       # ════════════════════════════════════════════════════════════════════════
-      # MODE ZIP — Build dari project Flutter yang diupload user
+      # MODE ZIP
       # ════════════════════════════════════════════════════════════════════════
       - name: "[ZIP] Download & extract project"
         if: steps.parse.outputs.mode == 'zip'
@@ -54,19 +54,19 @@ jobs:
           DIR=$(find project -name "pubspec.yaml" -maxdepth 5 | head -1 | xargs dirname)
           echo "dir=$DIR" >> $GITHUB_OUTPUT
 
-      # ── AUTO UPGRADE: Gradle, AGP, Kotlin, SDK, pubspec ────────────────────
+      # ── AUTO UPGRADE ──────────────────────────────────────────────────────
       - name: "[ZIP] Auto-upgrade build configs"
         if: steps.parse.outputs.mode == 'zip'
         working-directory: ${{ steps.root_zip.outputs.dir }}
         run: |
           ANDROID_DIR="android"
 
-          # Versi target terbaru yang kompatibel dengan Flutter 3.47.4
-          TARGET_GRADLE="8.14.0"
+          # Versi target — 8.14.3 adalah versi stabil terbaru (bukan 8.14.0!)
+          TARGET_GRADLE="8.14.3"
           TARGET_AGP="8.9.2"
           TARGET_KOTLIN="2.0.20"
 
-          # ── 1. Gradle wrapper → 8.14.0 ─────────────────────────────────────
+          # ── 1. Gradle wrapper → 8.14.3 ─────────────────────────────────────
           WRAPPER="$ANDROID_DIR/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$WRAPPER" ]; then
             sed -i -E "s|gradle-[0-9][0-9.]*-[a-z]*\\.zip|gradle-${TARGET_GRADLE}-bin.zip|g" "$WRAPPER"
@@ -74,7 +74,7 @@ jobs:
             grep distributionUrl "$WRAPPER"
           fi
 
-          # ── 2. Patch versi AGP & Kotlin di SEMUA file gradle ───────────────
+          # ── 2. Patch AGP & Kotlin ───────────────────────────────────────────
           FILES=""
           [ -f "$ANDROID_DIR/build.gradle" ]         && FILES="$FILES $ANDROID_DIR/build.gradle"
           [ -f "$ANDROID_DIR/build.gradle.kts" ]     && FILES="$FILES $ANDROID_DIR/build.gradle.kts"
@@ -85,22 +85,16 @@ jobs:
             echo "----- Patching $F -----"
             echo "SEBELUM:"; cat "$F"
 
-            # AGP Groovy: com.android.tools.build:gradle:8.x.x
             sed -i -E "s|com\\.android\\.tools\\.build:gradle:[0-9]+\\.[0-9]+\\.[0-9]+|com.android.tools.build:gradle:${TARGET_AGP}|g" "$F"
 
-            # AGP Kotlin DSL: id("com.android.application") version "8.x.x"
             sed -i -E "s|(id\\(\"com\\.android\\.application\"\\)[[:space:]]+version[[:space:]]+\")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${TARGET_AGP}\\2|g" "$F"
             sed -i -E "s|(id\\(\"com\\.android\\.library\"\\)[[:space:]]+version[[:space:]]+\")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${TARGET_AGP}\\2|g" "$F"
-
-            # AGP tanpa kurung: id "com.android.application" version "8.x.x"
             sed -i -E "s|(id[[:space:]]+\"com\\.android\\.application\"[[:space:]]+version[[:space:]]+\")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${TARGET_AGP}\\2|g" "$F"
             sed -i -E "s|(id[[:space:]]+\"com\\.android\\.library\"[[:space:]]+version[[:space:]]+\")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${TARGET_AGP}\\2|g" "$F"
 
-            # Kotlin plugin Groovy
             sed -i -E "s|org\\.jetbrains\\.kotlin:kotlin-gradle-plugin:[0-9]+\\.[0-9]+\\.[0-9]+|org.jetbrains.kotlin:kotlin-gradle-plugin:${TARGET_KOTLIN}|g" "$F"
             sed -i -E "s|kotlin_version[[:space:]]*=[[:space:]]*['\"][0-9]+\\.[0-9]+\\.[0-9]+['\"]|kotlin_version = '${TARGET_KOTLIN}'|g" "$F"
 
-            # Kotlin plugin Kotlin DSL
             sed -i -E "s|(id\\(\"org\\.jetbrains\\.kotlin\\.android\"\\)[[:space:]]+version[[:space:]]+\")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${TARGET_KOTLIN}\\2|g" "$F"
             sed -i -E "s|(id\\(\"org\\.jetbrains\\.kotlin\\.jvm\"\\)[[:space:]]+version[[:space:]]+\")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${TARGET_KOTLIN}\\2|g" "$F"
             sed -i -E "s|(id[[:space:]]+\"org\\.jetbrains\\.kotlin\\.android\"[[:space:]]+version[[:space:]]+\")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${TARGET_KOTLIN}\\2|g" "$F"
@@ -121,14 +115,11 @@ jobs:
           if [ -f "$APP_GRADLE" ]; then
             CURRENT=$(grep -oP '(?<=compileSdk\s)[0-9]+|(?<=compileSdkVersion\s)[0-9]+|(?<=compileSdk\s=\s)[0-9]+' "$APP_GRADLE" | head -1)
             CURRENT=${CURRENT:-0}
-            echo "[INFO] compileSdk asli project: $CURRENT"
 
             if [ "$CURRENT" -lt "$MIN_SDK" ] || [ "$CURRENT" -gt "$MAX_SDK" ]; then
               TARGET_SDK=$MAX_SDK
-              echo "[OK] compileSdk $CURRENT → $TARGET_SDK"
             else
               TARGET_SDK=$CURRENT
-              echo "[OK] compileSdk $CURRENT sudah dalam range"
             fi
 
             sed -i "s/compileSdkVersion\s\+[0-9]\+/compileSdkVersion $TARGET_SDK/g" "$APP_GRADLE"
@@ -145,57 +136,37 @@ jobs:
             sed -i 's/JavaVersion\.VERSION_[0-9]\+/JavaVersion.VERSION_17/g'        "$APP_GRADLE"
             sed -i 's/jvmTarget\s*=\s*"[0-9.]*"/jvmTarget = "17"/g'                 "$APP_GRADLE"
             sed -i 's/jvmTarget\s*=\s*JavaVersion\.VERSION_[0-9_]\+/jvmTarget = JavaVersion.VERSION_17/g' "$APP_GRADLE"
-
-            echo "[OK] compileSdk/targetSdk final: $TARGET_SDK, Java → 17"
           fi
 
-          # ── 4. gradle.properties: pastikan AndroidX & Jetifier aktif ───────
+          # ── 4. gradle.properties ───────────────────────────────────────────
           GRADLE_PROPS="$ANDROID_DIR/gradle.properties"
           if [ -f "$GRADLE_PROPS" ]; then
             grep -q "^android.useAndroidX"      "$GRADLE_PROPS" || echo "android.useAndroidX=true"      >> "$GRADLE_PROPS"
             grep -q "^android.enableJetifier"   "$GRADLE_PROPS" || echo "android.enableJetifier=true"   >> "$GRADLE_PROPS"
             grep -q "^org.gradle.jvmargs"       "$GRADLE_PROPS" || echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1G" >> "$GRADLE_PROPS"
-            echo "[OK] gradle.properties dipastikan"
           fi
 
-          # ── 5. pubspec.yaml: SESUAIKAN SDK CONSTRAINT ──────────────────────
+          # ── 5. pubspec.yaml ────────────────────────────────────────────────
           PUBSPEC="pubspec.yaml"
           if [ -f "$PUBSPEC" ]; then
-            echo "[INFO] pubspec sdk constraint SEBELUM:"
-            grep -E "^\s*sdk:" "$PUBSPEC" | head -3
-
             sed -i -E "s|sdk:\s*['\"]>=[0-9.]+\s*<[0-9.]+\s*['\"]|sdk: '>=3.8.0 <4.0.0'|g" "$PUBSPEC"
             sed -i -E "s|sdk:\s*['\"]\^[0-9.]+['\"]|sdk: '>=3.8.0 <4.0.0'|g"              "$PUBSPEC"
             sed -i -E "s|sdk:\s*['\"]>=[0-9.]+['\"]|sdk: '>=3.8.0 <4.0.0'|g"              "$PUBSPEC"
-
-            echo "[OK] pubspec sdk constraint → >=3.8.0 <4.0.0"
-            grep -E "^\s*sdk:" "$PUBSPEC" | head -3
           fi
 
-          # ── 6. Hapus lock lama & pub get ───────────────────────────────────
+          # ── 6. pub get ─────────────────────────────────────────────────────
           rm -f pubspec.lock
-          flutter pub get 2>&1 || {
-            echo "[WARN] pub get gagal, coba pub upgrade"
-            flutter pub upgrade || true
-          }
+          flutter pub get 2>&1 || flutter pub upgrade || true
 
-      # ── DEBUG: tampilkan versi SDK & config ────────────────────────────────
+      # ── DEBUG ─────────────────────────────────────────────────────────────
       - name: "[ZIP] Debug SDK versions"
         if: steps.parse.outputs.mode == 'zip'
         working-directory: ${{ steps.root_zip.outputs.dir }}
         run: |
-          echo "===== Flutter version ====="
           flutter --version
-          echo "===== Dart version ====="
           dart --version
-          echo "===== pubspec environment ====="
-          grep -A 3 "^environment:" pubspec.yaml || echo "no environment block"
-          echo "===== Gradle wrapper ====="
+          grep -A 3 "^environment:" pubspec.yaml || echo "no environment"
           grep distributionUrl android/gradle/wrapper/gradle-wrapper.properties || true
-          echo "===== build.gradle.kts (root) ====="
-          cat android/build.gradle.kts 2>/dev/null || cat android/build.gradle 2>/dev/null || true
-          echo "===== settings.gradle.kts ====="
-          cat android/settings.gradle.kts 2>/dev/null || cat android/settings.gradle 2>/dev/null || true
 
       - name: "[ZIP] Flutter pub get"
         if: steps.parse.outputs.mode == 'zip'
@@ -216,7 +187,7 @@ jobs:
           retention-days: 1
 
       # ════════════════════════════════════════════════════════════════════════
-      # MODE URL — Web2APK: wrap website ke dalam Flutter WebView APK
+      # MODE URL
       # ════════════════════════════════════════════════════════════════════════
       - name: "[URL] Create Flutter WebView project"
         if: steps.parse.outputs.mode == 'url'
