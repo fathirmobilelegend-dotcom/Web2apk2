@@ -5,6 +5,15 @@ on:
     branches:
       - build
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type (release/debug)'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -54,6 +63,8 @@ jobs:
           rm -rf flutter-project
           mkdir -p flutter-project
           unzip -q flutter-project.zip -d flutter-project
+
+          # Ratakan jika zip berisi satu folder wrapper
           FIRST_DIR=$(find flutter-project -mindepth 1 -maxdepth 1 -type d | head -n 1)
           ROOT_FILES=$(find flutter-project -mindepth 1 -maxdepth 1 | wc -l)
           if [ "$ROOT_FILES" = "1" ] && [ -n "$FIRST_DIR" ] && [ -f "$FIRST_DIR/pubspec.yaml" ]; then
@@ -63,9 +74,10 @@ jobs:
             mkdir flutter-project
             cp -R "$TMP"/. flutter-project/
           fi
+
           [ -f flutter-project/pubspec.yaml ] || { echo "pubspec.yaml tidak ditemukan"; exit 1; }
 
-      - name: Fix icons
+      - name: Fix Flutter icons
         if: env.type == 'flutter'
         run: |
           cd flutter-project
@@ -74,7 +86,8 @@ jobs:
           for dir in $MIPMAP_DIRS; do
             PNG="android/app/src/main/res/$dir/ic_launcher.png"
             if [ ! -f "$PNG" ] || ! file "$PNG" | grep -q PNG || ! identify "$PNG" &>/dev/null; then
-              NEEDS_REGEN=true; break
+              NEEDS_REGEN=true
+              break
             fi
           done
           [ "$NEEDS_REGEN" = "false" ] && { echo "Icons OK"; exit 0; }
@@ -101,7 +114,7 @@ jobs:
           cp ../../../release.keystore .
           for f in build.gradle build.gradle.kts; do
             [ -f "$f" ] || continue
-            # Jangan paksa ke 36, gunakan 35 (aman untuk AGP 8.x)
+            # Pakai compileSdk 35 (aman untuk AGP 8.x)
             sed -i -E 's/compileSdk(Version)? =? ?[0-9]+/compileSdk 35/g' "$f" || true
             sed -i -E 's/targetSdk(Version)? =? ?[0-9]+/targetSdk 35/g' "$f" || true
             # Signing config
@@ -115,12 +128,12 @@ jobs:
             sed -i 's|keyPassword = ".*"|keyPassword = "password"|g' "$f" || true
           done
 
-      - name: Sync Gradle wrapper dengan AGP  # ⭐ FIX UTAMA
+      # ⭐ FIX UTAMA: sinkronkan Gradle wrapper dengan AGP (URL tanpa backslash)
+      - name: Sync Gradle wrapper dengan AGP
         if: env.type == 'flutter'
         run: |
           cd flutter-project/android
 
-          # Deteksi AGP dari berbagai lokasi
           AGP_VER=""
           [ -f build.gradle ] && AGP_VER=$(grep -oP "com.android.tools.build:gradle:\K[0-9.]+" build.gradle | head -n1 || true)
           [ -z "$AGP_VER" ] && [ -f build.gradle.kts ] && AGP_VER=$(grep -oP 'com.android.tools.build:gradle:\K[0-9.]+' build.gradle.kts | head -n1 || true)
@@ -147,7 +160,7 @@ jobs:
           distributionPath=wrapper/dists
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
-          distributionUrl=https\\\\://services.gradle.org/distributions/gradle-${GRADLE_REQ}-all.zip
+          distributionUrl=https://services.gradle.org/distributions/gradle-${GRADLE_REQ}-all.zip
           EOF
           cat gradle/wrapper/gradle-wrapper.properties
 
@@ -195,13 +208,15 @@ jobs:
         run: |
           cd flutter-project
           BUILD_MODE="${build_type:-release}"
-          MAX=3; N=0
+          MAX=3
+          N=0
           while [ $N -lt $MAX ]; do
             N=$((N+1))
             echo "=== Attempt $N/$MAX ==="
             rm -f pubspec.lock
             if ! flutter pub get; then
-              rm -rf build .dart_tool pubspec.lock; continue
+              rm -rf build .dart_tool pubspec.lock
+              continue
             fi
             if [ "$BUILD_MODE" = "release" ]; then
               flutter build apk --release && { echo "BUILD OK"; exit 0; }
@@ -210,7 +225,8 @@ jobs:
             fi
             rm -rf build .dart_tool pubspec.lock
           done
-          echo "Build gagal setelah $MAX attempts"; exit 1
+          echo "Build gagal setelah $MAX attempts"
+          exit 1
 
       # ==================== WEB2APK ====================
       - name: Web2APK - Create project
@@ -218,12 +234,14 @@ jobs:
         run: |
           mkdir -p project/gradle/wrapper project/app/src/main/java/com/web2apk/app
           mkdir -p project/app/src/main/res/layout project/app/src/main/res/values
+
           cat > project/settings.gradle <<'EOF'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement { repositories { google(); mavenCentral() } }
           rootProject.name = "MyApp"
           include ':app'
           EOF
+
           cat > project/build.gradle <<'EOF'
           buildscript {
               repositories { google(); mavenCentral() }
@@ -232,22 +250,28 @@ jobs:
           allprojects { repositories { google(); mavenCentral() } }
           task clean(type: Delete) { delete rootProject.buildDir }
           EOF
+
           echo "org.gradle.jvmargs=-Xmx2048m" > project/gradle.properties
           echo "android.useAndroidX=true" >> project/gradle.properties
+
+          # ⭐ URL tanpa backslash
           cat > project/gradle/wrapper/gradle-wrapper.properties <<EOF
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
-          distributionUrl=https\\\\://services.gradle.org/distributions/gradle-8.9-all.zip
+          distributionUrl=https://services.gradle.org/distributions/gradle-8.9-all.zip
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           EOF
+
           cd project
-          gradle wrapper --gradle-version 8.9 2>/dev/null || {
+          if command -v gradle &>/dev/null; then
+            gradle wrapper --gradle-version 8.9
+          else
             curl -s "https://get.sdkman.io" | bash
             source "$HOME/.sdkman/bin/sdkman-init.sh"
             sdk install gradle 8.9
             gradle wrapper --gradle-version 8.9
-          }
+          fi
           chmod +x gradlew
 
       - name: Web2APK - Create app files
@@ -269,7 +293,9 @@ jobs:
               implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
           }
           EOF
+
           cp release.keystore project/app/
+
           cat > project/app/src/main/java/com/web2apk/app/MainActivity.java <<'EOF'
           package com.web2apk.app;
           import android.annotation.SuppressLint;
@@ -332,6 +358,7 @@ jobs:
               @Override protected void onDestroy() { if (webView != null) webView.destroy(); super.onDestroy(); }
           }
           EOF
+
           cat > project/app/src/main/java/com/web2apk/app/SplashActivity.java <<'EOF'
           package com.web2apk.app;
           import android.content.Intent; import android.os.Bundle; import android.os.Handler;
@@ -344,6 +371,7 @@ jobs:
               }
           }
           EOF
+
           cat > project/app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -363,6 +391,7 @@ jobs:
               </application>
           </manifest>
           EOF
+
           cat > project/app/src/main/res/layout/activity_main.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -379,6 +408,7 @@ jobs:
               </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
           </LinearLayout>
           EOF
+
           cat > project/app/src/main/res/layout/activity_splash.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -393,10 +423,12 @@ jobs:
               </LinearLayout>
           </RelativeLayout>
           EOF
+
           cat > project/app/src/main/res/values/strings.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources><string name="app_name">AppName</string></resources>
           EOF
+
           cat > project/app/src/main/res/values/styles.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
