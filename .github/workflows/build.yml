@@ -25,9 +25,10 @@ jobs:
       - name: 🤖 Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: 🔧 Install Tools (ImageMagick, jq, unzip, curl)
+      - name: 🔧 Install Tools
         run: sudo apt-get update && sudo apt-get install -y imagemagick jq unzip curl
 
+      # ⭐ DIPERBAIKI: Menggunakan block scalar (>) untuk menghindari masalah ':' pada satu baris
       - name: 📄 Read Build Configuration
         id: cfg
         shell: bash
@@ -106,7 +107,7 @@ jobs:
           done
           echo "✅ Icons regenerated."
 
-      - name: 🛠️ Flutter: Fix Android Config (compileSdk, signing)
+      - name: 🛠️ Flutter: Fix Android Config
         if: env.type == 'flutter'
         run: |
           cd flutter-project/android/app
@@ -228,7 +229,7 @@ jobs:
           channel: stable
           cache: true
 
-      - name: 📚 Flutter: Install Dependencies (flutter pub get)
+      - name: 📚 Flutter: Install Dependencies
         if: env.type == 'flutter'
         run: |
           cd flutter-project
@@ -236,7 +237,7 @@ jobs:
           flutter pub get
           echo "✅ Dependencies installed."
 
-      - name: 🔨 Flutter: Build APK (release/debug)
+      - name: 🔨 Flutter: Build APK
         if: env.type == 'flutter'
         shell: bash
         run: |
@@ -253,7 +254,7 @@ jobs:
           echo "✅ Build APK sukses!"
           ls -la build/app/outputs/flutter-apk/ || true
 
-      - name: 🔏 Flutter: Sign APK (release only)
+      - name: 🔏 Flutter: Sign APK
         if: env.type == 'flutter' && env.build_type == 'release'
         run: |
           APK=$(find flutter-project/build/app/outputs/flutter-apk -name "*.apk" | head -n1)
@@ -358,7 +359,7 @@ jobs:
           EOF
           cp release.keystore project/app/
 
-      - name: 🌐 Web2APK: Create Java Source (MainActivity)
+      - name: 🌐 Web2APK: Create Java Source
         if: env.type == 'web2apk'
         run: |
           cat > project/app/src/main/java/com/web2apk/app/MainActivity.java <<'EOF'
@@ -547,7 +548,7 @@ jobs:
           </resources>
           EOF
 
-      - name: 🌐 Web2APK: Apply URL, App Name & Generate Icons
+      - name: 🌐 Web2APK: Apply Config & Generate Icons
         if: env.type == 'web2apk'
         run: |
           sed -i "s|URL_PLACEHOLDER|${{ env.url }}|g" project/app/src/main/java/com/web2apk/app/MainActivity.java
@@ -577,7 +578,7 @@ jobs:
           chmod +x gradlew
           echo "✅ Gradle wrapper 8.9 siap."
 
-      - name: 🌐 Web2APK: Build APK (assembleRelease)
+      - name: 🌐 Web2APK: Build APK
         if: env.type == 'web2apk'
         run: |
           cd project
@@ -588,7 +589,7 @@ jobs:
       # ==================================================================
       # ============== COLLECT & UPLOAD ARTIFACT =========================
       # ==================================================================
-      - name: 📦 Collect APK (Rename ke app-release.apk)
+      - name: 📦 Collect APK
         run: |
           mkdir -p output
           APK=""
