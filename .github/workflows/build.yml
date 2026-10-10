@@ -62,7 +62,6 @@ jobs:
           SIZE=$(du -sm /tmp/flutter-check 2>/dev/null | cut -f1 || echo "0")
           echo "project_size=${SIZE}MB" >> $GITHUB_OUTPUT
 
-          # Cari pubspec.yaml
           PUB=$(find /tmp/flutter-check -maxdepth 3 -name pubspec.yaml | head -n1)
           if [ -n "$PUB" ]; then
             echo "has_pubspec=true" >> $GITHUB_OUTPUT
@@ -81,14 +80,11 @@ jobs:
             exit 0
           fi
 
-          # Extract Dart SDK constraint
           SDK_LINE=$(grep -A3 '^environment:' "$PUB" | grep 'sdk:' | head -n1 | sed 's/.*sdk:[[:space:]]*//; s/["'\'']//g' || true)
           DART_VER=$(echo "$SDK_LINE" | grep -oE '[0-9]+\.[0-9]+' | head -n1 || echo "")
 
-          # Default
           FV="3.24.0"
 
-          # Mapping lengkap Dart → Flutter
           case "$DART_VER" in
             "3.15"*) FV="3.35.2" ;;
             "3.14"*) FV="3.35.2" ;;
@@ -108,7 +104,6 @@ jobs:
             "3.0"*)  FV="3.10.0" ;;
           esac
 
-          # Plugin override
           NEED_HIGH=false
           if grep -Eq 'webview_flutter:[[:space:]]*(\^|>=)?(4\.1[5-9]|[5-9])' "$PUB"; then NEED_HIGH=true; fi
           if grep -Eq 'geolocator:[[:space:]]*(\^|>=)?1[4-9]\.' "$PUB"; then NEED_HIGH=true; fi
@@ -160,8 +155,6 @@ jobs:
 
       - name: 🤖 Setup Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          sdk-version: 'latest'
 
       - name: 📚 Install System Tools
         run: |
@@ -242,7 +235,6 @@ jobs:
             exit 1
           }
 
-          # Cari pubspec.yaml paling dalam (max 3 level)
           PUBSPEC_PATH=$(find flutter-project -maxdepth 3 -name pubspec.yaml | head -n1)
           if [ -z "$PUBSPEC_PATH" ]; then
             echo "❌ pubspec.yaml tidak ditemukan"
@@ -253,7 +245,6 @@ jobs:
           PROJECT_ROOT=$(dirname "$PUBSPEC_PATH")
           echo "🎯 Project root: $PROJECT_ROOT"
 
-          # Kalau project root bukan flutter-project, pindahkan isinya
           if [ "$PROJECT_ROOT" != "flutter-project" ]; then
             TMP=$(mktemp -d)
             cp -R "$PROJECT_ROOT"/. "$TMP"/
@@ -283,7 +274,7 @@ jobs:
         run: flutter --version
 
       # ==========================================================
-      # FIX ICONS (COMPREHENSIVE)
+      # FIX ICONS
       # ==========================================================
       - name: 🖼️ Fix App Icons
         run: |
@@ -291,7 +282,6 @@ jobs:
           MIPMAP_DIRS="mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi"
           NEEDS_REGEN=false
 
-          # Check validity
           for dir in $MIPMAP_DIRS; do
             PNG="android/app/src/main/res/$dir/ic_launcher.png"
             if [ ! -f "$PNG" ]; then
@@ -313,7 +303,6 @@ jobs:
 
           echo "🔧 Regenerating icons..."
 
-          # Sumber icon
           if [ -f ../build-assets/icon.png ] && file ../build-assets/icon.png | grep -q PNG; then
             ICON_SRC="../build-assets/icon.png"
             echo "✅ Using build-assets/icon.png"
@@ -323,7 +312,6 @@ jobs:
             echo "⚠️ Default blue icon"
           fi
 
-          # Generate semua density
           for pair in "hdpi 72" "mdpi 48" "xhdpi 96" "xxhdpi 144" "xxxhdpi 192"; do
             set -- $pair
             DIR="android/app/src/main/res/mipmap-$1"
@@ -335,7 +323,7 @@ jobs:
           echo "✅ Icons regenerated"
 
       # ==========================================================
-      # FIX ANDROID MANIFEST (permissions umum)
+      # FIX MANIFEST
       # ==========================================================
       - name: 📝 Fix AndroidManifest
         run: |
@@ -347,7 +335,6 @@ jobs:
 
           MANIFEST="android/app/src/main/AndroidManifest.xml"
 
-          # Cek internet permission
           if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
             echo "🔧 Add INTERNET permission"
             sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n\n    <application|' "$MANIFEST" || true
@@ -367,17 +354,12 @@ jobs:
             [ -f "$f" ] || continue
             echo "🔧 Patching $f"
 
-            # compileSdk 34
             sed -i -E 's/(compileSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 34/g' "$f" || true
             sed -i -E 's/compileSdkVersion[[:space:]]*[0-9]+/compileSdkVersion 34/g' "$f" || true
 
-            # targetSdk 34
             sed -i -E 's/(targetSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 34/g' "$f" || true
-
-            # minSdk 21
             sed -i -E 's/(minSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 21/g' "$f" || true
 
-            # Signing config
             sed -i 's|storeFile file(".*")|storeFile file("release.keystore")|g' "$f" || true
             sed -i 's|storeFile = file(".*")|storeFile = file("release.keystore")|g' "$f" || true
             sed -i 's|storePassword ".*"|storePassword "password"|g' "$f" || true
@@ -387,7 +369,6 @@ jobs:
             sed -i 's|keyPassword ".*"|keyPassword "password"|g' "$f" || true
             sed -i 's|keyPassword = ".*"|keyPassword = "password"|g' "$f" || true
 
-            # Java version 17
             sed -i -E 's/sourceCompatibility[[:space:]]+JavaVersion\.VERSION_[0-9_]+/sourceCompatibility JavaVersion.VERSION_17/g' "$f" || true
             sed -i -E 's/targetCompatibility[[:space:]]+JavaVersion\.VERSION_[0-9_]+/targetCompatibility JavaVersion.VERSION_17/g' "$f" || true
             sed -i -E 's/sourceCompatibility[[:space:]]*=[[:space:]]*JavaVersion\.VERSION_[0-9_]+/sourceCompatibility = JavaVersion.VERSION_17/g' "$f" || true
@@ -396,7 +377,7 @@ jobs:
           echo "✅ Android config fixed"
 
       # ==========================================================
-      # PATCH AGP + KOTLIN
+      # PATCH AGP + KOTLIN (sesuai versi Flutter)
       # ==========================================================
       - name: 🔧 Patch AGP + Kotlin
         run: |
@@ -406,7 +387,6 @@ jobs:
           FLUTTER_MINOR=$(echo "$FV" | cut -d. -f2)
           [ -z "$FLUTTER_MINOR" ] && FLUTTER_MINOR=0
 
-          # Determine target AGP & Kotlin
           TARGET_AGP="8.3.0"
           TARGET_KOTLIN="1.9.0"
           if [ "$FLUTTER_MINOR" -ge 35 ] 2>/dev/null; then
@@ -425,7 +405,6 @@ jobs:
 
           echo "🎯 Flutter $FV → AGP=$TARGET_AGP Kotlin=$TARGET_KOTLIN"
 
-          # Patch settings.gradle / .kts
           for f in android/settings.gradle android/settings.gradle.kts; do
             [ -f "$f" ] || continue
             sed -i -E "s|(id[[:space:]]*\(?[[:space:]]*[\"']com\.android\.application[\"'][[:space:]]*\)?[[:space:]]+version[[:space:]]+)[\"'][0-9.]+[\"']|\1\"${TARGET_AGP}\"|g" "$f" || true
@@ -433,7 +412,6 @@ jobs:
             sed -i -E "s|(id[[:space:]]*\(?[[:space:]]*[\"']org\.jetbrains\.kotlin\.android[\"'][[:space:]]*\)?[[:space:]]+version[[:space:]]+)[\"'][0-9.]+[\"']|\1\"${TARGET_KOTLIN}\"|g" "$f" || true
           done
 
-          # Patch android/build.gradle
           for f in android/build.gradle android/build.gradle.kts; do
             [ -f "$f" ] || continue
             sed -i -E "s|com\.android\.tools\.build:gradle:[0-9.]+|com.android.tools.build:gradle:${TARGET_AGP}|g" "$f" || true
@@ -442,28 +420,37 @@ jobs:
           done
 
           echo "✅ AGP + Kotlin patched"
+          echo "PATCHED_AGP=$TARGET_AGP" >> $GITHUB_ENV
+          echo "PATCHED_KOTLIN=$TARGET_KOTLIN" >> $GITHUB_ENV
+          echo "🔑 PATCHED_AGP=$TARGET_AGP tersimpan"
 
       # ==========================================================
-      # SYNC GRADLE WRAPPER
+      # SYNC GRADLE WRAPPER (pakai PATCHED_AGP dari step sebelumnya)
       # ==========================================================
       - name: 🔗 Sync Gradle Wrapper
         run: |
           cd flutter-project/android
 
-          AGP_VER=""
-          for f in build.gradle build.gradle.kts app/build.gradle app/build.gradle.kts settings.gradle settings.gradle.kts; do
-            [ -f "$f" ] || continue
-            V=$(grep -oP "com\.android\.tools\.build:gradle:\K[0-9]+\.[0-9]+(\.[0-9]+)?" "$f" 2>/dev/null | head -n1 || true)
-            [ -z "$V" ] && V=$(grep -oP "id\(['\"]com\.android\.application['\"]\)\s+version\s+['\"]?\K[0-9]+\.[0-9]+(\.[0-9]+)?" "$f" 2>/dev/null | head -n1 || true)
-            if [ -n "$V" ]; then AGP_VER="$V"; break; fi
-          done
+          AGP_VER="${PATCHED_AGP:-}"
+          echo "🔍 PATCHED_AGP dari env: '${AGP_VER}'"
+
+          if [ -z "$AGP_VER" ]; then
+            for f in build.gradle build.gradle.kts app/build.gradle app/build.gradle.kts settings.gradle settings.gradle.kts; do
+              [ -f "$f" ] || continue
+              V=$(grep -oP "com\.android\.tools\.build:gradle:\K[0-9]+\.[0-9]+(\.[0-9]+)?" "$f" 2>/dev/null | head -n1 || true)
+              [ -z "$V" ] && V=$(grep -oP "id\(['\"]com\.android\.application['\"]\)\s+version\s+['\"]?\K[0-9]+\.[0-9]+(\.[0-9]+)?" "$f" 2>/dev/null | head -n1 || true)
+              if [ -n "$V" ]; then AGP_VER="$V"; break; fi
+            done
+          fi
+
           [ -z "$AGP_VER" ] && AGP_VER="8.7.0"
-          echo "🎯 AGP detected: $AGP_VER"
+          echo "🎯 AGP version: $AGP_VER"
 
           MAJOR=$(echo $AGP_VER | cut -d. -f1)
           MINOR=$(echo $AGP_VER | cut -d. -f2)
 
           case "${MAJOR}.${MINOR}" in
+            8.13) GRADLE_REQ="8.14" ;;
             8.12) GRADLE_REQ="8.13" ;;
             8.11) GRADLE_REQ="8.13" ;;
             8.10) GRADLE_REQ="8.11.1" ;;
@@ -478,9 +465,9 @@ jobs:
             8.1)  GRADLE_REQ="8.0" ;;
             8.0)  GRADLE_REQ="8.0" ;;
             7.*)  GRADLE_REQ="7.6.3" ;;
-            *)    GRADLE_REQ="8.9" ;;
+            *)    GRADLE_REQ="8.13" ;;
           esac
-          echo "🎯 Gradle wrapper → $GRADLE_REQ"
+          echo "🎯 Gradle wrapper akan di-set ke: $GRADLE_REQ"
 
           mkdir -p gradle/wrapper
           cat > gradle/wrapper/gradle-wrapper.properties <<PROPS_EOF
@@ -491,7 +478,10 @@ jobs:
           zipStorePath=wrapper/dists
           PROPS_EOF
 
+          echo "=== gradle-wrapper.properties ==="
           cat gradle/wrapper/gradle-wrapper.properties
+          echo "================================"
+
           chmod +x gradlew 2>/dev/null || true
 
       # ==========================================================
@@ -518,7 +508,7 @@ jobs:
           cat gradle.properties
 
       # ==========================================================
-      # PUB GET (with retry + auto-fix)
+      # PUB GET (retry + auto-fix)
       # ==========================================================
       - name: 📚 Flutter Pub Get (Auto-Fix)
         shell: bash
@@ -533,67 +523,56 @@ jobs:
             echo "=== Auto-fixing pubspec ==="
             FIXED=false
 
-            # SDK constraint
             if grep -qE "requires SDK version|requires Dart SDK" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|sdk:[[:space:]]*['\"]?[>=^~ ]*3\.[0-9.]+[^'\"]*['\"]?|sdk: '>=3.6.0 <4.0.0'|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # webview_flutter
             if grep -q "webview_flutter" "$PUB_LOG" 2>/dev/null && grep -q "requires SDK" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|webview_flutter:[[:space:]]*[^[:space:]]+|webview_flutter: ^4.13.0|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # geolocator
             if grep -q "geolocator" "$PUB_LOG" 2>/dev/null && grep -qE "toARGB32|geolocator_android" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|geolocator:[[:space:]]*[^[:space:]]+|geolocator: ^13.0.4|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # firebase
             if grep -q "firebase_core" "$PUB_LOG" 2>/dev/null && grep -q "requires SDK" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|firebase_core:[[:space:]]*[^[:space:]]+|firebase_core: ^2.32.0|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # image_picker
             if grep -q "image_picker" "$PUB_LOG" 2>/dev/null && grep -q "requires SDK" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|image_picker:[[:space:]]*[^[:space:]]+|image_picker: ^1.1.2|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # file_picker
             if grep -q "file_picker" "$PUB_LOG" 2>/dev/null && grep -q "requires SDK" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|file_picker:[[:space:]]*[^[:space:]]+|file_picker: ^6.2.1|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # permission_handler
             if grep -q "permission_handler" "$PUB_LOG" 2>/dev/null && grep -q "requires SDK" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|permission_handler:[[:space:]]*[^[:space:]]+|permission_handler: ^11.3.1|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # flutter_local_notifications
             if grep -q "flutter_local_notifications" "$PUB_LOG" 2>/dev/null && grep -q "requires SDK" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|flutter_local_notifications:[[:space:]]*[^[:space:]]+|flutter_local_notifications: ^17.2.4|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # workmanager
             if grep -q "workmanager" "$PUB_LOG" 2>/dev/null && grep -q "requires SDK" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|workmanager:[[:space:]]*[^[:space:]]+|workmanager: ^0.5.2|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # Google maps
             if grep -q "google_maps_flutter" "$PUB_LOG" 2>/dev/null && grep -q "requires SDK" "$PUB_LOG" 2>/dev/null; then
               sed -i -E "s|google_maps_flutter:[[:space:]]*[^[:space:]]+|google_maps_flutter: ^2.9.0|g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # Dependency overrides
             if grep -q "overrides" "$PUB_LOG" 2>/dev/null; then
               sed -i '/^dependency_overrides:/,/^[^ ]/d' pubspec.yaml || true
               FIXED=true
