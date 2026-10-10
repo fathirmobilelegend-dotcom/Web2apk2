@@ -185,7 +185,6 @@ jobs:
             exit 1
           fi
           echo "✅ Project ready"
-          ls flutter-project | head -20
           echo "Project size: $(du -sh flutter-project)"
 
       - name: 🎯 Setup Flutter ${{ needs.preflight.outputs.flutter_version }}
@@ -363,7 +362,7 @@ jobs:
           echo "✅ Manifest checked"
 
       # ====================================================================
-      # FIX ANDROID CONFIG — pakai PERL buat kotlinOptions (GNU sed a\ broken)
+      # 🛠️ FIX ANDROID CONFIG — regex jvmTarget dibenerin (ga makan `}`)
       # ====================================================================
       - name: 🛠️ Fix Android Config (compileSdk 36 + JVM 17)
         shell: bash
@@ -401,12 +400,14 @@ jobs:
             sed -i -E 's/targetCompatibility[[:space:]]*=[[:space:]]*JavaVersion\.VERSION_[0-9_]+/targetCompatibility = JavaVersion.VERSION_17/g' "$f" || true
           done
 
-          # --- kotlinOptions: pakai PERL (GNU sed a\ multi-line BROKEN) ---
+          # ------------------------------------------------------------------
+          # kotlinOptions fix — regex cuma match isi quote, GA MAKAN `}`
+          # ------------------------------------------------------------------
           APP_GRADLE="app/build.gradle"
           if [ -f "$APP_GRADLE" ]; then
             if grep -q "kotlinOptions" "$APP_GRADLE"; then
-              echo "🔧 kotlinOptions sudah ada, patch jvmTarget = 17"
-              perl -i -pe 's/jvmTarget\s*=\s*.*/jvmTarget = "17"/g' "$APP_GRADLE"
+              echo "🔧 kotlinOptions ada, patch jvmTarget (aman, ga makan kurawal)"
+              perl -i -pe 's/jvmTarget\s*=\s*"[^"]*"/jvmTarget = "17"/g' "$APP_GRADLE"
             else
               echo "🔧 Inject kotlinOptions { jvmTarget = \"17\" } pakai perl"
               perl -i -0pe 's/(\bandroid\s*\{)/$1\n    kotlinOptions {\n        jvmTarget = "17"\n    }/' "$APP_GRADLE"
@@ -416,15 +417,27 @@ jobs:
           APP_GRADLE_KTS="app/build.gradle.kts"
           if [ -f "$APP_GRADLE_KTS" ]; then
             if grep -q "kotlinOptions" "$APP_GRADLE_KTS"; then
-              perl -i -pe 's/jvmTarget\s*=\s*.*/jvmTarget = "17"/g' "$APP_GRADLE_KTS"
+              perl -i -pe 's/jvmTarget\s*=\s*"[^"]*"/jvmTarget = "17"/g' "$APP_GRADLE_KTS"
             else
               perl -i -0pe 's/(\bandroid\s*\{)/$1\n    kotlinOptions {\n        jvmTarget = "17"\n    }/' "$APP_GRADLE_KTS"
             fi
           fi
 
-          echo "=== Hasil patch app/build.gradle ==="
-          head -40 app/build.gradle 2>/dev/null || true
-          echo "===================================="
+          # --- Validasi syntax kotlinOptions ---
+          echo "=== Validasi kurawal app/build.gradle ==="
+          OPEN=$(grep -o "{" app/build.gradle 2>/dev/null | wc -l || echo 0)
+          CLOSE=$(grep -o "}" app/build.gradle 2>/dev/null | wc -l || echo 0)
+          echo "Open: $OPEN | Close: $CLOSE"
+          if [ "$OPEN" != "$CLOSE" ]; then
+            echo "⚠️ Kurawal TIDAK BALANCE! Coba restore dari backup..."
+            # Fallback: hapus baris kotlinOptions yang rusak & tulis ulang block-nya
+            perl -i -0pe 's/kotlinOptions\s*\{[^}]*\}\s*//gs' app/build.gradle 2>/dev/null || true
+            perl -i -0pe 's/(\bandroid\s*\{)/$1\n    kotlinOptions {\n        jvmTarget = "17"\n    }/' app/build.gradle
+          fi
+          echo "========================================="
+          echo "=== Hasil app/build.gradle (30 baris) ==="
+          head -30 app/build.gradle 2>/dev/null || true
+          echo "========================================="
           echo "✅ Android config fixed"
 
       - name: 🔧 Patch AGP + Kotlin
