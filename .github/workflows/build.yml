@@ -147,7 +147,6 @@ jobs:
       - name: 🤖 Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      # ⭐ WAJIB: install platform 35 & 36 biar plugin tidak rewel
       - name: 📱 Install Android SDK Platform 35 & 36
         run: |
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
@@ -283,14 +282,13 @@ jobs:
       - name: 📝 Fix AndroidManifest
         run: |
           cd flutter-project
-          [ ! -f android/app/src/main/AndroidManifest.xml ] && exit 0
+          [ ! -f android/app/src/main/AndroidManifest.xml ] && exit 0 || true
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
             sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n\n    <application|' "$MANIFEST" || true
           fi
           echo "✅ Manifest checked"
 
-      # ⭐⭐⭐ FIX UTAMA: compileSdk 36 & targetSdk 36 ⭐⭐⭐
       - name: 🛠️ Fix Android Config (compileSdk 36)
         run: |
           cd flutter-project/android
@@ -300,20 +298,16 @@ jobs:
             [ -f "$f" ] || continue
             echo "🔧 Patching $f"
 
-            # compileSdk → 36 (wajib untuk plugin baru)
             sed -i -E 's/(compileSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 36/g' "$f" || true
             sed -i -E 's/compileSdkVersion[[:space:]]*[0-9]+/compileSdkVersion 36/g' "$f" || true
             sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*[0-9]+/compileSdk = 36/g' "$f" || true
 
-            # targetSdk → 36
             sed -i -E 's/(targetSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 36/g' "$f" || true
             sed -i -E 's/targetSdk[[:space:]]*=[[:space:]]*[0-9]+/targetSdk = 36/g' "$f" || true
 
-            # minSdk → 21
             sed -i -E 's/(minSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 21/g' "$f" || true
             sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*[0-9]+/minSdk = 21/g' "$f" || true
 
-            # signing config
             sed -i 's|storeFile file(".*")|storeFile file("release.keystore")|g' "$f" || true
             sed -i 's|storeFile = file(".*")|storeFile = file("release.keystore")|g' "$f" || true
             sed -i 's|storePassword ".*"|storePassword "password"|g' "$f" || true
@@ -323,14 +317,12 @@ jobs:
             sed -i 's|keyPassword ".*"|keyPassword "password"|g' "$f" || true
             sed -i 's|keyPassword = ".*"|keyPassword = "password"|g' "$f" || true
 
-            # Java 17
             sed -i -E 's/sourceCompatibility[[:space:]]+JavaVersion\.VERSION_[0-9_]+/sourceCompatibility JavaVersion.VERSION_17/g' "$f" || true
             sed -i -E 's/targetCompatibility[[:space:]]+JavaVersion\.VERSION_[0-9_]+/targetCompatibility JavaVersion.VERSION_17/g' "$f" || true
             sed -i -E 's/sourceCompatibility[[:space:]]*=[[:space:]]*JavaVersion\.VERSION_[0-9_]+/sourceCompatibility = JavaVersion.VERSION_17/g' "$f" || true
             sed -i -E 's/targetCompatibility[[:space:]]*=[[:space:]]*JavaVersion\.VERSION_[0-9_]+/targetCompatibility = JavaVersion.VERSION_17/g' "$f" || true
           done
 
-          # Verifikasi
           echo "=== Hasil patch ==="
           grep -nE "compileSdk|targetSdk|minSdk" app/build.gradle* || true
           echo "==================="
@@ -452,6 +444,7 @@ jobs:
           EOF
           echo "✅ gradle.properties fixed"
 
+      # ⭐⭐⭐ FIX UTAMA: pakai if statement, bukan && chain di akhir script ⭐⭐⭐
       - name: 📚 Flutter Pub Get (Auto-Fix)
         shell: bash
         run: |
@@ -507,7 +500,10 @@ jobs:
               sed -i '/^dependency_overrides:/,/^[^ ]/d' pubspec.yaml || true
               FIXED=true
             fi
-            [ "$FIXED" = "true" ] && rm -f pubspec.lock
+            if [ "$FIXED" = "true" ]; then
+              rm -f pubspec.lock
+            fi
+            return 0
           }
 
           while [ $N -lt $MAX ] && [ "$SUCCESS" = "false" ]; do
@@ -524,7 +520,11 @@ jobs:
             fi
           done
 
-          [ "$SUCCESS" = "false" ] && { echo "❌ pub get failed"; tail -100 "$PUB_LOG"; exit 1; }
+          if [ "$SUCCESS" = "false" ]; then
+            echo "❌ pub get failed setelah $MAX attempts"
+            tail -100 "$PUB_LOG"
+            exit 1
+          fi
 
       - name: 🔍 Flutter Analyze (informative)
         continue-on-error: true
@@ -580,7 +580,10 @@ jobs:
         if: env.build_type == 'release'
         run: |
           APK=$(find flutter-project/build/app/outputs/flutter-apk -name "*.apk" | head -n1)
-          [ -z "$APK" ] && { echo "❌ APK tidak ada"; exit 1; }
+          if [ -z "$APK" ]; then
+            echo "❌ APK tidak ada"
+            exit 1
+          fi
           BT=$(ls $ANDROID_HOME/build-tools | sort -V | tail -n1)
           $ANDROID_HOME/build-tools/$BT/apksigner sign --ks release.keystore --ks-pass pass:password --key-pass pass:password "$APK" || true
           $ANDROID_HOME/build-tools/$BT/apksigner verify "$APK" || true
@@ -589,7 +592,11 @@ jobs:
         run: |
           mkdir -p output
           APK=$(find flutter-project/build/app/outputs/flutter-apk -name "*.apk" | head -n1)
-          [ -z "$APK" ] && { echo "❌ APK tidak ditemukan!"; find . -name "*.apk"; exit 1; }
+          if [ -z "$APK" ]; then
+            echo "❌ APK tidak ditemukan!"
+            find . -name "*.apk"
+            exit 1
+          fi
           cp "$APK" output/app-release.apk
           ls -la output/
 
