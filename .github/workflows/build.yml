@@ -294,7 +294,6 @@ jobs:
           fi
           echo "✅ Manifest checked"
 
-      # ⭐ FIX compileSdk 36 + Java 17 + Kotlin jvmTarget 17 (tanpa Python heredoc)
       - name: 🛠️ Fix Android Config (compileSdk 36 + JVM 17)
         run: |
           cd flutter-project/android
@@ -329,30 +328,28 @@ jobs:
             sed -i -E 's/targetCompatibility[[:space:]]*=[[:space:]]*JavaVersion\.VERSION_[0-9_]+/targetCompatibility = JavaVersion.VERSION_17/g' "$f" || true
           done
 
-          # Fix Kotlin JVM target 17 (pakai awk, bukan python)
           APP_GRADLE="app/build.gradle"
           if [ -f "$APP_GRADLE" ]; then
             if grep -q "kotlinOptions" "$APP_GRADLE"; then
               echo "🔧 kotlinOptions sudah ada, patch jvmTarget jadi 17"
-              sed -i -E 's/jvmTarget[[:space:]]*=[[:space:]]*.+$/jvmTarget = "17"/g' "$APP_GRADLE" || true
+              sed -i -E 's/jvmTarget[[:space:]]*=[[:space:]]*.*/jvmTarget = "17"/g' "$APP_GRADLE" || true
             else
-              echo "🔧 Inject kotlinOptions { jvmTarget = 17 } ke app/build.gradle"
-              awk '/^[[:space:]]*android[[:space:]]*[{]/ && !done { print; print "    kotlinOptions {"; print "        jvmTarget = \"17\""; print "    }"; done=1; next } { print }' "$APP_GRADLE" > "${APP_GRADLE}.tmp" && mv "${APP_GRADLE}.tmp" "$APP_GRADLE"
+              echo "🔧 Inject kotlinOptions { jvmTarget = 17 } SETELAH android { di app/build.gradle"
+              sed -i '/^[[:space:]]*android[[:space:]]*{/a\    kotlinOptions {\n        jvmTarget = "17"\n    }' "$APP_GRADLE"
             fi
           fi
 
           APP_GRADLE_KTS="app/build.gradle.kts"
           if [ -f "$APP_GRADLE_KTS" ]; then
             if grep -q "kotlinOptions" "$APP_GRADLE_KTS"; then
-              echo "🔧 kotlinOptions .kts sudah ada, patch jvmTarget"
-              sed -i -E 's/jvmTarget[[:space:]]*=[[:space:]]*.+$/jvmTarget = "17"/g' "$APP_GRADLE_KTS" || true
+              sed -i -E 's/jvmTarget[[:space:]]*=[[:space:]]*.*/jvmTarget = "17"/g' "$APP_GRADLE_KTS" || true
             else
-              awk '/^[[:space:]]*android[[:space:]]*[{]/ && !done { print; print "    kotlinOptions {"; print "        jvmTarget = \"17\""; print "    }"; done=1; next } { print }' "$APP_GRADLE_KTS" > "${APP_GRADLE_KTS}.tmp" && mv "${APP_GRADLE_KTS}.tmp" "$APP_GRADLE_KTS"
+              sed -i '/^[[:space:]]*android[[:space:]]*{/a\    kotlinOptions {\n        jvmTarget = "17"\n    }' "$APP_GRADLE_KTS"
             fi
           fi
 
           echo "=== Hasil patch ==="
-          grep -nE "compileSdk|targetSdk|minSdk|jvmTarget|kotlinOptions" app/build.gradle* || true
+          grep -nE "compileSdk|targetSdk|minSdk|jvmTarget|kotlinOptions|^android" app/build.gradle* || true
           echo "==================="
           echo "✅ Android config fixed"
 
