@@ -1,4 +1,4 @@
-name: Build Flutter APK (Full Auto-Fix)
+name: Build Flutter APK
 
 on:
   push:
@@ -7,21 +7,6 @@ on:
     paths:
       - 'flutter-project.zip'
       - 'build-config.json'
-  workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'debug / release'
-        required: false
-        default: 'release'
-        type: choice
-        options:
-          - release
-          - debug
-      source:
-        description: 'base / zip (auto-detect kalau kosong)'
-        required: false
-        default: 'base'
-        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -35,7 +20,6 @@ jobs:
     outputs:
       build_type: ${{ steps.cfg.outputs.build_type }}
       flutter_version: ${{ steps.detect.outputs.flutter_version }}
-      source_mode: ${{ steps.srcmode.outputs.mode }}
     steps:
       - uses: actions/checkout@v4
 
@@ -47,47 +31,28 @@ jobs:
             echo "build_type=$BT" >> $GITHUB_OUTPUT
             echo "🎯 Build type: $BT"
           else
-            echo "build_type=${{ github.event.inputs.build_type || 'release' }}" >> $GITHUB_OUTPUT
+            echo "build_type=release" >> $GITHUB_OUTPUT
           fi
-
-      - name: 🎯 Determine Source Mode
-        id: srcmode
-        run: |
-          MODE="${{ github.event.inputs.source }}"
-          if [ -z "$MODE" ]; then
-            if [ -f flutter-project.zip ]; then MODE="zip"; else MODE="base"; fi
-          fi
-          echo "mode=$MODE" >> $GITHUB_OUTPUT
-          echo "🎯 Source mode: $MODE"
 
       - name: 🎯 Detect Optimal Flutter Version
         id: detect
         run: |
-          MODE="${{ steps.srcmode.outputs.mode }}"
-          PUB=""
-
-          if [ "$MODE" = "zip" ] && [ -f flutter-project.zip ]; then
-            rm -rf /tmp/flutter-check
-            mkdir -p /tmp/flutter-check
-            unzip -q flutter-project.zip -d /tmp/flutter-check 2>/dev/null || true
-            PUB=$(find /tmp/flutter-check -maxdepth 3 -name pubspec.yaml | head -n1)
-          else
-            PUB=$(find . -maxdepth 3 -name pubspec.yaml -not -path './flutter-project/*' | head -n1)
-          fi
+          rm -rf /tmp/flutter-check
+          mkdir -p /tmp/flutter-check
+          unzip -q flutter-project.zip -d /tmp/flutter-check 2>/dev/null || true
+          PUB=$(find /tmp/flutter-check -maxdepth 3 -name pubspec.yaml | head -n1)
 
           if [ -z "$PUB" ]; then
-            echo "flutter_version=3.24.0" >> $GITHUB_OUTPUT
-            echo "⚠️ pubspec.yaml tidak ketemu, pakai default 3.24.0"
+            echo "flutter_version=3.35.2" >> $GITHUB_OUTPUT
+            echo "⚠️ pubspec.yaml tidak ketemu di ZIP"
             exit 0
           fi
 
           echo "✅ Found: $PUB"
-
           SDK_LINE=$(grep -A3 '^environment:' "$PUB" | grep 'sdk:' | head -n1 | sed 's/.*sdk:[[:space:]]*//; s/["'\'']//g' || true)
           DART_VER=$(echo "$SDK_LINE" | grep -oE '[0-9]+\.[0-9]+' | head -n1 || echo "")
 
           FV="3.24.0"
-
           case "$DART_VER" in
             "3.15"*) FV="3.35.2" ;;
             "3.14"*) FV="3.35.2" ;;
@@ -157,12 +122,11 @@ jobs:
         run: |
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;35.0.0" "build-tools;36.0.0" "platform-tools" || true
-          sdkmanager --list_installed | grep -E "platforms|build-tools" || true
 
       - name: 📚 Install System Tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq imagemagick jq unzip curl file xxd zip p7zip-full rsync
+          sudo apt-get install -y -qq imagemagick jq unzip curl file xxd zip p7zip-full
 
       - name: 💾 Cache Gradle
         uses: actions/cache@v4
@@ -188,7 +152,7 @@ jobs:
             echo "build_type=$(jq -r .build_type build-config.json)" >> $GITHUB_ENV
           else
             echo "type=flutter" >> $GITHUB_ENV
-            echo "build_type=${{ github.event.inputs.build_type || 'release' }}" >> $GITHUB_ENV
+            echo "build_type=release" >> $GITHUB_ENV
           fi
 
       - name: 🔐 Generate Keystore
@@ -200,47 +164,26 @@ jobs:
             -storepass password -keypass password \
             -dname "CN=BuildBot, OU=Dev, O=BuildBot, L=City, S=State, C=ID"
 
-      - name: 📦 Prepare Project Source
+      - name: 📦 Extract Project
         run: |
-          MODE="${{ needs.preflight.outputs.source_mode }}"
-          echo "🎯 Source mode: $MODE"
+          rm -rf flutter-project && mkdir -p flutter-project
+          rm -rf /tmp/ext && mkdir -p /tmp/ext
+          unzip -q flutter-project.zip -d /tmp/ext || { echo "❌ Gagal extract ZIP"; exit 1; }
 
-          rm -rf flutter-project
-          mkdir -p flutter-project
-
-          if [ "$MODE" = "zip" ] && [ -f flutter-project.zip ]; then
-            echo "📦 Extracting ZIP → flutter-project/..."
-            rm -rf /tmp/ext && mkdir -p /tmp/ext
-            unzip -q flutter-project.zip -d /tmp/ext || { echo "❌ Gagal extract ZIP"; exit 1; }
-
-            PUB=$(find /tmp/ext -maxdepth 3 -name pubspec.yaml | head -n1)
-            if [ -z "$PUB" ]; then
-              echo "❌ pubspec.yaml tidak ditemukan di ZIP"
-              find /tmp/ext -maxdepth 3 -type f | head -30
-              exit 1
-            fi
-            SRC_DIR=$(dirname "$PUB")
-            cp -R "$SRC_DIR"/. flutter-project/
-          else
-            echo "📂 Using base repo source (root → flutter-project/)..."
-            rsync -a \
-              --exclude='.git' \
-              --exclude='.github' \
-              --exclude='flutter-project' \
-              --exclude='flutter-project.zip' \
-              --exclude='release.keystore' \
-              --exclude='build-config.json' \
-              --exclude='output' \
-              --exclude='tmp' \
-              ./ flutter-project/
+          PUB=$(find /tmp/ext -maxdepth 3 -name pubspec.yaml | head -n1)
+          if [ -z "$PUB" ]; then
+            echo "❌ pubspec.yaml tidak ditemukan di ZIP"
+            find /tmp/ext -maxdepth 3 -type f | head -30
+            exit 1
           fi
+          SRC_DIR=$(dirname "$PUB")
+          cp -R "$SRC_DIR"/. flutter-project/
 
           if [ ! -f flutter-project/pubspec.yaml ]; then
             echo "❌ pubspec.yaml tidak ditemukan di flutter-project/"
-            ls -la flutter-project/ | head -30
+            ls -la flutter-project/
             exit 1
           fi
-
           echo "✅ Project ready"
           ls flutter-project | head -20
           echo "Project size: $(du -sh flutter-project)"
@@ -340,17 +283,12 @@ jobs:
             exit 1
           fi
 
-      # ============================================================
-      # 🖼️ ICON HANDLING (fungsi sama kayak FlutterPipeline)
-      # ============================================================
-      - name: 🎨 Generate Launcher Icons (flutter_launcher_icons)
+      - name: 🎨 Generate Launcher Icons
         run: |
           cd flutter-project
           if [ -f pubspec.yaml ] && grep -q "flutter_launcher_icons:" pubspec.yaml; then
             echo "🎨 Config flutter_launcher_icons ditemukan, generating..."
-            flutter pub run flutter_launcher_icons || {
-              echo "⚠️ Icon generation warning (lanjut aja)"
-            }
+            flutter pub run flutter_launcher_icons || echo "⚠️ Icon generation warning (lanjut aja)"
           else
             echo "ℹ️ Tidak ada config flutter_launcher_icons, skip"
           fi
@@ -358,20 +296,16 @@ jobs:
       - name: 🧽 Clean Corrupt & Duplicate Icons
         run: |
           cd flutter-project
-
           if [ -d "android/app/src/main/res" ]; then
-            # Hapus icon zero-size (korup)
             find android/app/src/main/res/mipmap-* -name "ic_launcher*.png" -size 0 -delete 2>/dev/null || true
             find android/app/src/main/res/mipmap-* -name "ic_launcher*.jpg" -size 0 -delete 2>/dev/null || true
-
-            # Hapus JPG duplikat kalau ada PNG dengan nama sama
             for mipmap in android/app/src/main/res/mipmap-*; do
               if [ -d "$mipmap" ]; then
                 for icon in "$mipmap"/ic_launcher*.jpg; do
                   if [ -f "$icon" ]; then
                     b=$(basename "$icon" .jpg)
                     if [ -f "$mipmap/$b.png" ]; then
-                      echo "Removing duplicate JPG: $icon (PNG exists)"
+                      echo "Removing duplicate JPG: $icon"
                       rm -f "$icon"
                     fi
                   fi
@@ -379,11 +313,9 @@ jobs:
               fi
             done
             echo "✅ Icon validation complete"
-          else
-            echo "ℹ️ Folder res tidak ada, skip icon cleanup"
           fi
 
-      - name: 🖼️ Fallback Regenerate Icons (kalau ada yang korup)
+      - name: 🖼️ Fallback Regenerate Icons
         run: |
           cd flutter-project
           MIPMAP_DIRS="mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi"
@@ -430,7 +362,11 @@ jobs:
           fi
           echo "✅ Manifest checked"
 
+      # ====================================================================
+      # FIX ANDROID CONFIG — pakai PERL buat kotlinOptions (GNU sed a\ broken)
+      # ====================================================================
       - name: 🛠️ Fix Android Config (compileSdk 36 + JVM 17)
+        shell: bash
         run: |
           cd flutter-project/android
           cp ../../release.keystore app/ 2>/dev/null || cp ../release.keystore app/ 2>/dev/null || true
@@ -438,6 +374,8 @@ jobs:
           for f in app/build.gradle app/build.gradle.kts; do
             [ -f "$f" ] || continue
             echo "🔧 Patching $f"
+
+            # SDK versions
             sed -i -E 's/(compileSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 36/g' "$f" || true
             sed -i -E 's/compileSdkVersion[[:space:]]*[0-9]+/compileSdkVersion 36/g' "$f" || true
             sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*[0-9]+/compileSdk = 36/g' "$f" || true
@@ -446,6 +384,7 @@ jobs:
             sed -i -E 's/(minSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 21/g' "$f" || true
             sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*[0-9]+/minSdk = 21/g' "$f" || true
 
+            # Keystore
             sed -i 's|storeFile file(".*")|storeFile file("release.keystore")|g' "$f" || true
             sed -i 's|storeFile = file(".*")|storeFile = file("release.keystore")|g' "$f" || true
             sed -i 's|storePassword ".*"|storePassword "password"|g' "$f" || true
@@ -455,39 +394,42 @@ jobs:
             sed -i 's|keyPassword ".*"|keyPassword "password"|g' "$f" || true
             sed -i 's|keyPassword = ".*"|keyPassword = "password"|g' "$f" || true
 
+            # Java compatibility
             sed -i -E 's/sourceCompatibility[[:space:]]+JavaVersion\.VERSION_[0-9_]+/sourceCompatibility JavaVersion.VERSION_17/g' "$f" || true
             sed -i -E 's/targetCompatibility[[:space:]]+JavaVersion\.VERSION_[0-9_]+/targetCompatibility JavaVersion.VERSION_17/g' "$f" || true
             sed -i -E 's/sourceCompatibility[[:space:]]*=[[:space:]]*JavaVersion\.VERSION_[0-9_]+/sourceCompatibility = JavaVersion.VERSION_17/g' "$f" || true
             sed -i -E 's/targetCompatibility[[:space:]]*=[[:space:]]*JavaVersion\.VERSION_[0-9_]+/targetCompatibility = JavaVersion.VERSION_17/g' "$f" || true
           done
 
+          # --- kotlinOptions: pakai PERL (GNU sed a\ multi-line BROKEN) ---
           APP_GRADLE="app/build.gradle"
           if [ -f "$APP_GRADLE" ]; then
             if grep -q "kotlinOptions" "$APP_GRADLE"; then
-              sed -i -E 's/jvmTarget[[:space:]]*=[[:space:]]*.*/jvmTarget = "17"/g' "$APP_GRADLE" || true
+              echo "🔧 kotlinOptions sudah ada, patch jvmTarget = 17"
+              perl -i -pe 's/jvmTarget\s*=\s*.*/jvmTarget = "17"/g' "$APP_GRADLE"
             else
-              sed -i '/^[[:space:]]*android[[:space:]]*{/a\    kotlinOptions {\n        jvmTarget = "17"\n    }' "$APP_GRADLE"
+              echo "🔧 Inject kotlinOptions { jvmTarget = \"17\" } pakai perl"
+              perl -i -0pe 's/(\bandroid\s*\{)/$1\n    kotlinOptions {\n        jvmTarget = "17"\n    }/' "$APP_GRADLE"
             fi
           fi
 
           APP_GRADLE_KTS="app/build.gradle.kts"
           if [ -f "$APP_GRADLE_KTS" ]; then
             if grep -q "kotlinOptions" "$APP_GRADLE_KTS"; then
-              sed -i -E 's/jvmTarget[[:space:]]*=[[:space:]]*.*/jvmTarget = "17"/g' "$APP_GRADLE_KTS" || true
+              perl -i -pe 's/jvmTarget\s*=\s*.*/jvmTarget = "17"/g' "$APP_GRADLE_KTS"
             else
-              sed -i '/^[[:space:]]*android[[:space:]]*{/a\    kotlinOptions {\n        jvmTarget = "17"\n    }' "$APP_GRADLE_KTS"
+              perl -i -0pe 's/(\bandroid\s*\{)/$1\n    kotlinOptions {\n        jvmTarget = "17"\n    }/' "$APP_GRADLE_KTS"
             fi
           fi
 
-          echo "=== Hasil patch ==="
-          grep -nE "compileSdk|targetSdk|minSdk|jvmTarget|kotlinOptions|^android" app/build.gradle* || true
-          echo "==================="
+          echo "=== Hasil patch app/build.gradle ==="
+          head -40 app/build.gradle 2>/dev/null || true
+          echo "===================================="
           echo "✅ Android config fixed"
 
       - name: 🔧 Patch AGP + Kotlin
         run: |
           cd flutter-project
-
           FV=$(flutter --version 2>/dev/null | grep -oE 'Flutter [0-9]+\.[0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo "3.24.0")
           FM=$(echo "$FV" | cut -d. -f2)
           [ -z "$FM" ] && FM=0
@@ -566,7 +508,6 @@ jobs:
           zipStorePath=wrapper/dists
           PROPS_EOF
 
-          cat gradle/wrapper/gradle-wrapper.properties
           chmod +x gradlew 2>/dev/null || true
 
       - name: ⚙️ Fix Gradle Properties
@@ -601,14 +542,10 @@ jobs:
           MODE="${build_type:-release}"
           echo "🎯 Build mode: $MODE"
 
-          MAX=3
-          N=0
-          SUCCESS=false
-
+          MAX=3; N=0; SUCCESS=false
           while [ $N -lt $MAX ] && [ "$SUCCESS" = "false" ]; do
             N=$((N+1))
             echo "===== Build attempt $N / $MAX ====="
-
             if [ "$MODE" = "release" ]; then
               flutter build apk --release --no-tree-shake-icons 2>&1 | tee build.log
             else
@@ -618,9 +555,7 @@ jobs:
             if [ -f "build/app/outputs/flutter-apk/app-${MODE}.apk" ] || \
                [ -f "build/app/outputs/flutter-apk/app-release.apk" ] || \
                [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
-              SUCCESS=true
-              echo "✅ Build success"
-              break
+              SUCCESS=true; echo "✅ Build success"; break
             fi
 
             echo "❌ Build failed, cleaning..."
@@ -671,7 +606,6 @@ jobs:
         run: |
           echo "════════════════════════════════════════"
           echo "Build Type     : ${{ env.build_type }}"
-          echo "Source Mode    : ${{ needs.preflight.outputs.source_mode }}"
           echo "Flutter Version: ${{ needs.preflight.outputs.flutter_version }}"
           echo "Status         : ${{ job.status }}"
           echo "════════════════════════════════════════"
