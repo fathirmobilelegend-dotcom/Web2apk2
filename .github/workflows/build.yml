@@ -1,109 +1,68 @@
-name: Build Flutter APK (Auto-Fix Aggressive)
+name: Build APK (Flutter + Gradle Auto-Fix)
 
 on:
   push:
     branches:
       - build
     paths:
-      - 'flutter-project.zip'
+      - 'project.zip'
       - 'build-config.json'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=512m"
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx4096m"
   JAVA_TOOL_OPTIONS: "-Xmx4096m"
 
 jobs:
   preflight:
-    name: 🔍 Preflight + Auto-Detect
+    name: Preflight
     runs-on: ubuntu-latest
     outputs:
       build_type: ${{ steps.cfg.outputs.build_type }}
+      project_type: ${{ steps.cfg.outputs.project_type }}
       flutter_version: ${{ steps.detect.outputs.flutter_version }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: 📄 Read Build Config
+      - name: Read Config
         id: cfg
         run: |
+          BT="release"
+          PT="flutter"
           if [ -f build-config.json ]; then
             BT=$(jq -r .build_type build-config.json)
-            echo "build_type=$BT" >> $GITHUB_OUTPUT
-            echo "🎯 Build type: $BT"
-          else
-            echo "build_type=release" >> $GITHUB_OUTPUT
+            PT=$(jq -r .type build-config.json)
           fi
+          echo "build_type=$BT" >> $GITHUB_OUTPUT
+          echo "project_type=$PT" >> $GITHUB_OUTPUT
+          echo "Type: $PT | Mode: $BT"
 
-      - name: 🎯 Detect Flutter Version (Auto)
+      - name: Detect Flutter Version
         id: detect
         run: |
-          rm -rf /tmp/fc && mkdir -p /tmp/fc
-          unzip -q flutter-project.zip -d /tmp/fc 2>/dev/null || true
-          PUB=$(find /tmp/fc -maxdepth 3 -name pubspec.yaml | head -n1)
-
+          rm -rf /tmp/fc
+          mkdir -p /tmp/fc
+          unzip -q project.zip -d /tmp/fc 2>/dev/null || true
+          PUB=$(find /tmp/fc -maxdepth 4 -name pubspec.yaml -not -path '*/.*' | head -n1)
           if [ -z "$PUB" ]; then
             echo "flutter_version=3.35.2" >> $GITHUB_OUTPUT
-            echo "⚠️ pubspec.yaml tidak ditemukan, default 3.35.2"
             exit 0
           fi
-
-          echo "✅ Found: $PUB"
-          SDK_LINE=$(grep -A3 '^environment:' "$PUB" | grep 'sdk:' | head -n1 | sed 's/.*sdk:[[:space:]]*//; s/["'\'']//g' || true)
-          DART_VER=$(echo "$SDK_LINE" | grep -oE '[0-9]+\.[0-9]+' | head -n1 || echo "")
-
-          FV="3.24.0"
-          case "$DART_VER" in
-            "3.15"*) FV="3.35.2" ;;
-            "3.14"*) FV="3.35.2" ;;
-            "3.13"*) FV="3.35.2" ;;
-            "3.12"*) FV="3.35.2" ;;
-            "3.11"*) FV="3.35.2" ;;
-            "3.10"*) FV="3.35.2" ;;
-            "3.9"*)  FV="3.35.2" ;;
-            "3.8"*)  FV="3.32.0" ;;
-            "3.7"*)  FV="3.29.0" ;;
-            "3.6"*)  FV="3.27.0" ;;
-            "3.5"*)  FV="3.24.0" ;;
-            "3.4"*)  FV="3.22.0" ;;
-            "3.3"*)  FV="3.19.0" ;;
-            "3.2"*)  FV="3.16.0" ;;
-            "3.1"*)  FV="3.13.0" ;;
-            "3.0"*)  FV="3.10.0" ;;
+          SDK=$(grep -A3 '^environment:' "$PUB" | grep 'sdk:' | head -n1 | sed 's/.*sdk:[[:space:]]*//; s/["'"'"']//g' || echo "")
+          DART=$(echo "$SDK" | grep -oE '[0-9]+\.[0-9]+' | head -n1 || echo "")
+          FV="3.35.2"
+          case "$DART" in
+            "3.8") FV="3.32.0" ;;
+            "3.7") FV="3.29.0" ;;
+            "3.6") FV="3.27.0" ;;
+            "3.5") FV="3.24.0" ;;
+            "3.4") FV="3.22.0" ;;
           esac
-
-          NEED_HIGH=false
-          for pat in \
-            'webview_flutter:[[:space:]]*(\^|>=)?(4\.1[5-9]|[5-9])' \
-            'geolocator:[[:space:]]*(\^|>=)?1[4-9]\.' \
-            'firebase_core:[[:space:]]*(\^|>=)?3\.' \
-            'firebase_auth:[[:space:]]*(\^|>=)?5\.' \
-            'cloud_firestore:[[:space:]]*(\^|>=)?5\.' \
-            'image_picker:[[:space:]]*(\^|>=)?1\.(2[0-9]|[3-9][0-9])' \
-            'file_picker:[[:space:]]*(\^|>=)?[8-9]\.' \
-            'permission_handler:[[:space:]]*(\^|>=)?12\.' \
-            'flutter_local_notifications:[[:space:]]*(\^|>=)?1[7-9]\.' \
-            'workmanager:[[:space:]]*(\^|>=)?0\.[6-9]' \
-            'google_maps_flutter:[[:space:]]*(\^|>=)?(2\.1[0-9]|[3-9])' \
-            'dio:[[:space:]]*(\^|>=)?5\.' \
-            'video_player:[[:space:]]*(\^|>=)?2\.[8-9]' \
-            'sqflite:[[:space:]]*(\^|>=)?2\.[4-9]' \
-            'shared_preferences:[[:space:]]*(\^|>=)?2\.[3-9]' \
-            'url_launcher:[[:space:]]*(\^|>=)?6\.[2-9]' \
-            'intl:[[:space:]]*(\^|>=)?0\.(19|20)'
-          do
-            if grep -Eq "$pat" "$PUB"; then NEED_HIGH=true; break; fi
-          done
-
-          if [ "$NEED_HIGH" = "true" ]; then
-            FV="3.35.2"
-            echo "⚠️ Plugin butuh versi tinggi → override 3.35.2"
-          fi
-
           echo "flutter_version=$FV" >> $GITHUB_OUTPUT
-          echo "🎯 Using Flutter: $FV"
+          echo "Flutter version: $FV"
 
   build:
-    name: 🔨 Build APK
+    name: Build APK
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -111,28 +70,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: ☕ Setup Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
+          distribution: temurin
           java-version: "17"
 
-      - name: 🤖 Setup Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: 📱 Install SDK Platforms
+      - name: Install Android SDK Packages
         run: |
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-34" "platforms;android-35" "platforms;android-36" \
-                     "build-tools;34.0.0" "build-tools;35.0.0" "build-tools;36.0.0" \
-                     "platform-tools" "cmdline-tools;latest" || true
+          for pkg in \
+            "platforms;android-33" \
+            "platforms;android-34" \
+            "platforms;android-35" \
+            "platforms;android-36" \
+            "build-tools;33.0.2" \
+            "build-tools;34.0.0" \
+            "build-tools;35.0.0" \
+            "build-tools;36.0.0" \
+            "platform-tools" \
+            "cmdline-tools;latest"
+          do
+            sdkmanager "$pkg" > /dev/null 2>&1 || true
+          done
 
-      - name: 📚 Install Tools
+      - name: Install System Tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq imagemagick jq unzip curl file zip p7zip-full
+          sudo apt-get install -y -qq imagemagick jq unzip curl file zip p7zip-full python3
 
-      - name: 💾 Cache Gradle
+      - name: Cache Gradle
         uses: actions/cache@v4
         with:
           path: |
@@ -141,366 +111,424 @@ jobs:
           key: gradle-${{ runner.os }}-${{ github.sha }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: 💾 Cache Pub
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-${{ runner.os }}-${{ github.sha }}
-          restore-keys: pub-${{ runner.os }}-
-
-      - name: 📄 Read Config
-        run: |
-          if [ -f build-config.json ]; then
-            cat build-config.json
-            echo "type=$(jq -r .type build-config.json)" >> $GITHUB_ENV
-            echo "build_type=$(jq -r .build_type build-config.json)" >> $GITHUB_ENV
-          else
-            echo "type=flutter" >> $GITHUB_ENV
-            echo "build_type=release" >> $GITHUB_ENV
-          fi
-
-      - name: 🔐 Generate Keystore
+      - name: Generate Keystore
         run: |
           keytool -genkeypair -v \
-            -keystore release.keystore -alias release \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass password -keypass password \
+            -keystore release.keystore \
+            -alias release \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass password \
+            -keypass password \
             -dname "CN=BuildBot, OU=Dev, O=BuildBot, L=City, S=State, C=ID"
 
-      - name: 📦 Extract Project
+      - name: Extract Project
         run: |
-          rm -rf flutter-project && mkdir -p flutter-project
-          rm -rf /tmp/ext && mkdir -p /tmp/ext
-          unzip -q flutter-project.zip -d /tmp/ext || { echo "❌ Gagal extract ZIP"; exit 1; }
-          PUB=$(find /tmp/ext -maxdepth 3 -name pubspec.yaml | head -n1)
-          if [ -z "$PUB" ]; then
-            echo "❌ pubspec.yaml tidak ditemukan"
-            find /tmp/ext -maxdepth 3 -type f | head -30
-            exit 1
-          fi
-          SRC_DIR=$(dirname "$PUB")
-          cp -R "$SRC_DIR"/. flutter-project/
-          [ -f flutter-project/pubspec.yaml ] || { echo "❌ pubspec tidak ada di root"; exit 1; }
-          echo "✅ Project ready: $(du -sh flutter-project)"
+          rm -rf project
+          mkdir -p project
+          rm -rf /tmp/ext
+          mkdir -p /tmp/ext
+          unzip -q project.zip -d /tmp/ext || { echo "Gagal extract ZIP"; exit 1; }
 
-      - name: 🎯 Setup Flutter ${{ needs.preflight.outputs.flutter_version }}
+          if [ "${{ needs.preflight.outputs.project_type }}" = "flutter" ]; then
+            PUB=$(find /tmp/ext -maxdepth 4 -name pubspec.yaml -not -path '*/.*' | head -n1)
+            if [ -z "$PUB" ]; then
+              echo "pubspec.yaml tidak ditemukan (mode Flutter)"
+              exit 1
+            fi
+            cp -R "$(dirname "$PUB")"/. project/
+            echo "Flutter project ready"
+          else
+            GL=$(find /tmp/ext -maxdepth 4 -name gradlew -type f | head -n1)
+            if [ -z "$GL" ]; then
+              GL=$(find /tmp/ext -maxdepth 4 \( -name build.gradle -o -name build.gradle.kts \) | head -n1)
+              [ -z "$GL" ] && { echo "build.gradle tidak ditemukan"; exit 1; }
+              GL=$(dirname "$GL")
+            else
+              GL=$(dirname "$GL")
+            fi
+            cp -R "$GL"/. project/
+            echo "Gradle project ready"
+          fi
+
+          echo "Project size: $(du -sh project)"
+
+      - name: Setup Flutter ${{ needs.preflight.outputs.flutter_version }}
+        if: needs.preflight.outputs.project_type == 'flutter'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ needs.preflight.outputs.flutter_version }}
           channel: stable
           cache: true
 
-      - name: 📊 Flutter Version
+      - name: Show Flutter Version
+        if: needs.preflight.outputs.project_type == 'flutter'
         run: flutter --version
 
-      # ==========================================================
-      # 🧠 MASTER AUTO-FIX STEP (FIXED — AGP/Kotlin only in settings)
-      # ==========================================================
-      - name: 🧠 Master Auto-Fix & Build
-        id: autofix
+      # ====================================================================
+      # MEGA AUTO-FIX + BUILD
+      # ====================================================================
+      - name: Build
         shell: bash
         run: |
           set +e
-          cd flutter-project
-          MODE="${build_type:-release}"
-          echo "🎯 Build mode: $MODE"
+          cd project
+          MODE="${{ needs.preflight.outputs.build_type }}"
+          PTYPE="${{ needs.preflight.outputs.project_type }}"
+          echo "Type: $PTYPE | Mode: $MODE"
 
-          log() { echo "[$(date +%H:%M:%S)] $*"; }
-
-          # ==========================================================
-          # 🔧 FIX #1: pubspec.yaml
-          # ==========================================================
-          fix_pubspec() {
-            log "🔧 Fix pubspec.yaml..."
-            if grep -qE "requires SDK version|requires Dart SDK" pubget.log 2>/dev/null; then
-              sed -i -E "s|sdk:[[:space:]]*['\"]?[>=^~ ]*3\.[0-9.]+[^'\"]*['\"]?|sdk: '>=3.6.0 <4.0.0'|g" pubspec.yaml || true
-            fi
+          # ================================================================
+          # STEP 1: AUTO-FIX PUBSPEC (khusus Flutter)
+          # ================================================================
+          if [ "$PTYPE" = "flutter" ] && [ -f pubspec.yaml ]; then
+            echo "--- Fix pubspec.yaml ---"
+            sed -i -E "s|sdk:[[:space:]]*['\"]?[>=^~ ]*3\.[0-9.]+[^'\"]*['\"]?|sdk: '>=3.6.0 <4.0.0'|g" pubspec.yaml || true
             sed -i -E "s|webview_flutter:[[:space:]]*[^[:space:]]+|webview_flutter: ^4.13.0|g" pubspec.yaml || true
             sed -i -E "s|geolocator:[[:space:]]*[^[:space:]]+|geolocator: ^13.0.4|g" pubspec.yaml || true
             sed -i -E "s|firebase_core:[[:space:]]*[^[:space:]]+|firebase_core: ^2.32.0|g" pubspec.yaml || true
+            sed -i -E "s|firebase_auth:[[:space:]]*[^[:space:]]+|firebase_auth: ^4.19.0|g" pubspec.yaml || true
+            sed -i -E "s|cloud_firestore:[[:space:]]*[^[:space:]]+|cloud_firestore: ^4.17.5|g" pubspec.yaml || true
             sed -i -E "s|image_picker:[[:space:]]*[^[:space:]]+|image_picker: ^1.1.2|g" pubspec.yaml || true
             sed -i -E "s|file_picker:[[:space:]]*[^[:space:]]+|file_picker: ^6.2.1|g" pubspec.yaml || true
             sed -i -E "s|permission_handler:[[:space:]]*[^[:space:]]+|permission_handler: ^11.3.1|g" pubspec.yaml || true
             sed -i -E "s|flutter_local_notifications:[[:space:]]*[^[:space:]]+|flutter_local_notifications: ^17.2.4|g" pubspec.yaml || true
             sed -i -E "s|workmanager:[[:space:]]*[^[:space:]]+|workmanager: ^0.5.2|g" pubspec.yaml || true
             sed -i -E "s|google_maps_flutter:[[:space:]]*[^[:space:]]+|google_maps_flutter: ^2.9.0|g" pubspec.yaml || true
+            sed -i -E "s|dio:[[:space:]]*[^[:space:]]+|dio: ^5.7.0|g" pubspec.yaml || true
+            sed -i -E "s|video_player:[[:space:]]*[^[:space:]]+|video_player: ^2.9.1|g" pubspec.yaml || true
+            sed -i -E "s|sqflite:[[:space:]]*[^[:space:]]+|sqflite: ^2.3.3+1|g" pubspec.yaml || true
+            sed -i -E "s|shared_preferences:[[:space:]]*[^[:space:]]+|shared_preferences: ^2.3.2|g" pubspec.yaml || true
+            sed -i -E "s|url_launcher:[[:space:]]*[^[:space:]]+|url_launcher: ^6.3.1|g" pubspec.yaml || true
+            sed -i -E "s|intl:[[:space:]]*[^[:space:]]+|intl: ^0.19.0|g" pubspec.yaml || true
             rm -f pubspec.lock
-          }
+          fi
 
-          # ==========================================================
-          # 🔧 FIX #2: Android config
-          # ==========================================================
-          fix_android_config() {
-            log "🔧 Fix android config (SDK/keystore/Java)..."
-            cd android 2>/dev/null || return 0
-            cp ../../release.keystore app/ 2>/dev/null || cp ../release.keystore app/ 2>/dev/null || true
+          # ================================================================
+          # STEP 2: PYTHON FIX — KTS & Groovy syntax
+          # ================================================================
+          cat > /tmp/fix_syntax.py << 'PYEOF'
+import re
+import os
+import sys
 
-            for f in app/build.gradle app/build.gradle.kts; do
-              [ -f "$f" ] || continue
-              sed -i -E 's/(compileSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 36/g' "$f" || true
-              sed -i -E 's/compileSdkVersion[[:space:]]*[0-9]+/compileSdkVersion 36/g' "$f" || true
-              sed -i -E 's/(targetSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 36/g' "$f" || true
-              sed -i -E 's/targetSdk[[:space:]]*=[[:space:]]*[0-9]+/targetSdk = 36/g' "$f" || true
-              sed -i -E 's/(minSdk(Version)?)[[:space:]]*=?[[:space:]]*[0-9]+/\1 21/g' "$f" || true
-              sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*[0-9]+/minSdk = 21/g' "$f" || true
+def fix_kts(path):
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            c = f.read()
+    except Exception:
+        return False
+    o = c
+    c = re.sub(r'\bcompileSdkVersion\s*=?\s*\d+', 'compileSdk = 36', c)
+    c = re.sub(r'\bcompileSdk\s*=?\s*\d+', 'compileSdk = 36', c)
+    c = re.sub(r'\bminSdkVersion\s*=?\s*\d+', 'minSdk = 21', c)
+    c = re.sub(r'\bminSdk\s*=?\s*\d+', 'minSdk = 21', c)
+    c = re.sub(r'\btargetSdkVersion\s*=?\s*\d+', 'targetSdk = 36', c)
+    c = re.sub(r'\btargetSdk\s*=?\s*\d+', 'targetSdk = 36', c)
+    c = re.sub(r'^(\s*)namespace\s+"([^"]+)"', r'\1namespace = "\2"', c, flags=re.M)
+    c = re.sub(r"^(\s*)namespace\s+'([^']+)'", r'\1namespace = "\2"', c, flags=re.M)
+    c = re.sub(r'^(\s*)applicationId\s+"([^"]+)"', r'\1applicationId = "\2"', c, flags=re.M)
+    c = re.sub(r"^(\s*)applicationId\s+'([^']+)'", r'\1applicationId = "\2"', c, flags=re.M)
+    c = re.sub(r'^(\s*)ndkVersion\s+"([^"]+)"', r'\1ndkVersion = "\2"', c, flags=re.M)
+    c = re.sub(r'^(\s*)versionCode\s+([^\s=\n]+)', r'\1versionCode = \2', c, flags=re.M)
+    c = re.sub(r'^(\s*)versionName\s+([^\s=\n]+)', r'\1versionName = \2', c, flags=re.M)
+    c = re.sub(r'signingConfig\s+signingConfigs\.', 'signingConfig = signingConfigs.', c)
+    c = re.sub(r'jvmTarget\s*=\s*JavaVersion\.VERSION_\d+\.toString\(\)', 'jvmTarget = "17"', c)
+    c = re.sub(r'jvmTarget\s*=\s*JvmTarget\.JVM_\d+', 'jvmTarget = "17"', c)
+    c = re.sub(r'jvmTarget\s*=\s*"[^"]*"', 'jvmTarget = "17"', c)
+    c = re.sub(r"jvmTarget\s*=\s*'[^']*'", 'jvmTarget = "17"', c)
+    c = re.sub(r'sourceCompatibility\s*=?\s*JavaVersion\.VERSION_\d+', 'sourceCompatibility = JavaVersion.VERSION_17', c)
+    c = re.sub(r'targetCompatibility\s*=?\s*JavaVersion\.VERSION_\d+', 'targetCompatibility = JavaVersion.VERSION_17', c)
+    if c != o:
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(c)
+            print(f"FIXED: {path}")
+        except Exception:
+            pass
 
-              sed -i 's|storeFile file(".*")|storeFile file("release.keystore")|g' "$f" || true
-              sed -i 's|storeFile = file(".*")|storeFile = file("release.keystore")|g' "$f" || true
-              sed -i 's|storePassword ".*"|storePassword "password"|g' "$f" || true
-              sed -i 's|storePassword = ".*"|storePassword = "password"|g' "$f" || true
-              sed -i 's|keyAlias ".*"|keyAlias "release"|g' "$f" || true
-              sed -i 's|keyAlias = ".*"|keyAlias = "release"|g' "$f" || true
-              sed -i 's|keyPassword ".*"|keyPassword "password"|g' "$f" || true
-              sed -i 's|keyPassword = ".*"|keyPassword = "password"|g' "$f" || true
+def fix_groovy(path):
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            c = f.read()
+    except Exception:
+        return False
+    o = c
+    c = re.sub(r'\bcompileSdkVersion\s*=?\s*\d+', 'compileSdkVersion 36', c)
+    c = re.sub(r'\bcompileSdk\s*=?\s*\d+', 'compileSdk 36', c)
+    c = re.sub(r'\bminSdkVersion\s*=?\s*\d+', 'minSdkVersion 21', c)
+    c = re.sub(r'\bminSdk\s*=?\s*\d+', 'minSdk 21', c)
+    c = re.sub(r'\btargetSdkVersion\s*=?\s*\d+', 'targetSdkVersion 36', c)
+    c = re.sub(r'\btargetSdk\s*=?\s*\d+', 'targetSdk 36', c)
+    c = re.sub(r'jvmTarget\s*=\s*"[^"]*"', 'jvmTarget = "17"', c)
+    c = re.sub(r"jvmTarget\s*=\s*'[^']*'", 'jvmTarget = "17"', c)
+    c = re.sub(r'sourceCompatibility\s*=?\s*JavaVersion\.VERSION_\d+', 'sourceCompatibility JavaVersion.VERSION_17', c)
+    c = re.sub(r'targetCompatibility\s*=?\s*JavaVersion\.VERSION_\d+', 'targetCompatibility JavaVersion.VERSION_17', c)
+    if c != o:
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(c)
+            print(f"FIXED: {path}")
+        except Exception:
+            pass
 
-              sed -i -E 's/sourceCompatibility[[:space:]]+JavaVersion\.VERSION_[0-9_]+/sourceCompatibility JavaVersion.VERSION_17/g' "$f" || true
-              sed -i -E 's/targetCompatibility[[:space:]]+JavaVersion\.VERSION_[0-9_]+/targetCompatibility JavaVersion.VERSION_17/g' "$f" || true
-              sed -i -E 's/sourceCompatibility[[:space:]]*=[[:space:]]*JavaVersion\.VERSION_[0-9_]+/sourceCompatibility = JavaVersion.VERSION_17/g' "$f" || true
-              sed -i -E 's/targetCompatibility[[:space:]]*=[[:space:]]*JavaVersion\.VERSION_[0-9_]+/targetCompatibility = JavaVersion.VERSION_17/g' "$f" || true
-            done
+for root, dirs, files in os.walk('.'):
+    for fn in files:
+        fp = os.path.join(root, fn)
+        if fn in ['build.gradle', 'settings.gradle']:
+            fix_groovy(fp)
+        elif fn in ['build.gradle.kts', 'settings.gradle.kts']:
+            fix_kts(fp)
 
-            # ---------- kotlinOptions (Groovy .gradle) ----------
-            APP="app/build.gradle"
-            if [ -f "$APP" ]; then
-              if grep -q "kotlinOptions" "$APP"; then
-                perl -i -pe 's/jvmTarget\s*=\s*"[^"]*"/jvmTarget = "17"/g' "$APP"
-              else
-                perl -i -0pe 's/(\bandroid\s*\{)/$1\n    kotlinOptions {\n        jvmTarget = "17"\n    }/' "$APP"
-              fi
-              O=$(grep -o "{" "$APP" | wc -l); C=$(grep -o "}" "$APP" | wc -l)
-              if [ "$O" != "$C" ]; then
-                log "⚠️ Kurawal tidak balance ($O/$C), restore kotlinOptions"
-                perl -i -0pe 's/kotlinOptions\s*\{[^}]*\}\s*//gs' "$APP" 2>/dev/null || true
-                perl -i -0pe 's/(\bandroid\s*\{)/$1\n    kotlinOptions {\n        jvmTarget = "17"\n    }/' "$APP"
+print("Python syntax fix done")
+PYEOF
+          python3 /tmp/fix_syntax.py
+
+          # ================================================================
+          # STEP 3: FIX ANDROID CONFIG (khusus Flutter)
+          # ================================================================
+          if [ -d "android" ]; then
+            echo "--- Fix android config ---"
+
+            # Fix AndroidManifest
+            MANIFEST="android/app/src/main/AndroidManifest.xml"
+            if [ -f "$MANIFEST" ]; then
+              if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+                sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n\n    <application|' "$MANIFEST" || true
               fi
             fi
 
-            # ---------- KTS (.kts) — pakai jvmToolchain ----------
-            APP_KTS="app/build.gradle.kts"
-            if [ -f "$APP_KTS" ]; then
-              # Hapus kotlinOptions block (format Groovy) dari KTS
-              perl -i -0pe 's/kotlinOptions\s*\{[^}]*\}\s*//gs' "$APP_KTS" 2>/dev/null || true
-
-              if ! grep -q "jvmToolchain" "$APP_KTS"; then
-                if ! grep -qE '^\s*kotlin\s*\{' "$APP_KTS"; then
-                  perl -i -0pe 's/(plugins\s*\{[^}]*\})/$1\n\nkotlin {\n    jvmToolchain(17)\n}/s' "$APP_KTS"
+            # Icons fix
+            if [ -d "android/app/src/main/res" ]; then
+              find android/app/src/main/res -name "ic_launcher*.png" -size 0 -delete 2>/dev/null || true
+              MIPMAP_DIRS="mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi"
+              NEEDS=false
+              for d in $MIPMAP_DIRS; do
+                PNG="android/app/src/main/res/$d/ic_launcher.png"
+                if [ ! -f "$PNG" ]; then NEEDS=true; break; fi
+                if ! file "$PNG" | grep -q PNG; then NEEDS=true; break; fi
+              done
+              if [ "$NEEDS" = "true" ]; then
+                convert -size 512x512 xc:blue /tmp/icon.png 2>/dev/null || true
+                if [ -f /tmp/icon.png ]; then
+                  for pair in "hdpi 72" "mdpi 48" "xhdpi 96" "xxhdpi 144" "xxxhdpi 192"; do
+                    set -- $pair
+                    D="android/app/src/main/res/mipmap-$1"
+                    mkdir -p "$D"
+                    convert /tmp/icon.png -resize ${2}x${2} "$D/ic_launcher.png" 2>/dev/null || true
+                    cp "$D/ic_launcher.png" "$D/ic_launcher_round.png" 2>/dev/null || true
+                  done
                 fi
               fi
-
-              O=$(grep -o "{" "$APP_KTS" | wc -l); C=$(grep -o "}" "$APP_KTS" | wc -l)
-              if [ "$O" != "$C" ]; then
-                log "⚠️ KTS kurawal tidak balance ($O/$C)"
-              fi
             fi
 
-            cat > gradle.properties <<'EOF'
-          org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m
-          org.gradle.parallel=true
-          org.gradle.caching=true
-          org.gradle.configureondemand=true
-          org.gradle.daemon=false
-          android.useAndroidX=true
-          android.enableJetifier=true
-          android.nonTransitiveRClass=false
-          android.nonFinalResIds=false
-          android.suppressUnsupportedCompileSdk=36
-          kotlin.daemon.jvmargs=-Xmx2048m
-          kotlin.jvm.target.validation.mode=warning
-          EOF
+            # gradle.properties
+            printf '%s\n' \
+              'org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m' \
+              'org.gradle.parallel=true' \
+              'org.gradle.caching=true' \
+              'org.gradle.configureondemand=true' \
+              'org.gradle.daemon=false' \
+              'android.useAndroidX=true' \
+              'android.enableJetifier=true' \
+              'android.nonTransitiveRClass=false' \
+              'android.nonFinalResIds=false' \
+              'android.suppressUnsupportedCompileSdk=36' \
+              'kotlin.daemon.jvmargs=-Xmx2048m' \
+              'kotlin.jvm.target.validation.mode=warning' \
+              > android/gradle.properties
 
-            cd ..
-          }
+            # local.properties
+            FLUTTER_ROOT_DIR=$(dirname "$(dirname "$(which flutter 2>/dev/null || echo /opt/flutter)")")
+            printf '%s\n' \
+              "flutter.sdk=$FLUTTER_ROOT_DIR" \
+              "sdk.dir=$ANDROID_HOME" \
+              > android/local.properties
 
-          # ==========================================================
-          # 🔧 FIX #3: AGP + Kotlin — HANYA settings & root build.gradle
-          # ==========================================================
-          fix_gradle_agp() {
-            local AGP="$1"; local KT="$2"
-            log "🔧 Fix AGP=$AGP Kotlin=$KT (settings + root only)..."
+            # Copy keystore
+            if [ -f "../release.keystore" ]; then
+              cp ../release.keystore android/app/ 2>/dev/null || true
+            fi
 
-            for f in android/settings.gradle android/settings.gradle.kts; do
+            # Fix keystore refs di app/build.gradle*
+            for f in android/app/build.gradle android/app/build.gradle.kts; do
               [ -f "$f" ] || continue
-              log "   → patch $f"
-              sed -i -E "s|(id[[:space:]]*\(?[[:space:]]*[\"']com\.android\.application[\"'][[:space:]]*\)?[[:space:]]+version[[:space:]]+)[\"'][0-9.]+[\"']|\1\"${AGP}\"|g" "$f" || true
-              sed -i -E "s|(id[[:space:]]*\(?[[:space:]]*[\"']com\.android\.library[\"'][[:space:]]*\)?[[:space:]]+version[[:space:]]+)[\"'][0-9.]+[\"']|\1\"${AGP}\"|g" "$f" || true
-              sed -i -E "s|(id[[:space:]]*\(?[[:space:]]*[\"']org\.jetbrains\.kotlin\.android[\"'][[:space:]]*\)?[[:space:]]+version[[:space:]]+)[\"'][0-9.]+[\"']|\1\"${KT}\"|g" "$f" || true
-              sed -i -E "s|(id[[:space:]]*\(?[[:space:]]*[\"']org\.jetbrains\.kotlin\.jvm[\"'][[:space:]]*\)?[[:space:]]+version[[:space:]]+)[\"'][0-9.]+[\"']|\1\"${KT}\"|g" "$f" || true
+              perl -i -pe 's/storeFile\s*=?\s*file\(".*"\)/storeFile = file("release.keystore")/g' "$f" 2>/dev/null
+              perl -i -pe 's/storePassword\s*=?\s*".*"/storePassword = "password"/g' "$f" 2>/dev/null
+              perl -i -pe 's/keyAlias\s*=?\s*".*"/keyAlias = "release"/g' "$f" 2>/dev/null
+              perl -i -pe 's/keyPassword\s*=?\s*".*"/keyPassword = "password"/g' "$f" 2>/dev/null
             done
+          fi
 
-            for f in android/build.gradle android/build.gradle.kts; do
-              [ -f "$f" ] || continue
-              log "   → patch root $f"
-              sed -i -E "s|com\.android\.tools\.build:gradle:[0-9.]+|com.android.tools.build:gradle:${AGP}|g" "$f" || true
-              sed -i -E "s|org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+|org.jetbrains.kotlin:kotlin-gradle-plugin:${KT}|g" "$f" || true
-              sed -i -E "s|ext\.kotlin_version[[:space:]]*=[[:space:]]*[\"'][0-9.]+[\"']|ext.kotlin_version = '${KT}'|g" "$f" || true
-            done
+          # ================================================================
+          # STEP 4: FIX GRADLE (khusus project Gradle)
+          # ================================================================
+          if [ "$PTYPE" = "gradle" ] && [ -f gradlew ]; then
+            chmod +x gradlew 2>/dev/null || true
+          fi
 
-            # ❌ JANGAN sentuh app/build.gradle untuk version!
-          }
-
-          # ==========================================================
-          # 🔧 FIX #4: Gradle wrapper
-          # ==========================================================
-          fix_gradle_wrapper() {
-            local AGP="$1"
-            local MAJOR=$(echo "$AGP" | cut -d. -f1)
-            local MINOR=$(echo "$AGP" | cut -d. -f2)
-            local GRADLE_REQ
-            case "${MAJOR}.${MINOR}" in
-              8.13) GRADLE_REQ="8.14" ;;
-              8.12|8.11) GRADLE_REQ="8.13" ;;
-              8.10|8.9) GRADLE_REQ="8.11.1" ;;
-              8.8) GRADLE_REQ="8.10.2" ;;
-              8.7) GRADLE_REQ="8.9" ;;
-              8.6|8.5) GRADLE_REQ="8.7" ;;
-              8.4) GRADLE_REQ="8.6" ;;
-              8.3) GRADLE_REQ="8.4" ;;
-              8.2) GRADLE_REQ="8.2" ;;
-              8.1|8.0) GRADLE_REQ="8.0" ;;
-              7.*) GRADLE_REQ="7.6.3" ;;
-              *) GRADLE_REQ="8.13" ;;
-            esac
-            mkdir -p android/gradle/wrapper
-            cat > android/gradle/wrapper/gradle-wrapper.properties <<EOF
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https://services.gradle.org/distributions/gradle-${GRADLE_REQ}-all.zip
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-            chmod +x android/gradlew 2>/dev/null || true
-            log "   Gradle wrapper → $GRADLE_REQ"
-          }
-
-          # ==========================================================
-          # 🚀 MAIN AUTO-FIX LOOP
-          # ==========================================================
-          MAX_ATTEMPTS=4
+          # ================================================================
+          # STEP 5: BUILD LOOP
+          # ================================================================
+          MAX=3
           SUCCESS=false
-          AGP_LIST=("8.11.1" "8.9.1" "8.7.0" "8.3.0")
-          KT_LIST=("2.2.20" "2.1.0" "2.0.20" "1.9.0")
+          AGP_LIST=("8.11.1" "8.9.1" "8.7.0")
+          KT_LIST=("2.2.20" "2.1.0" "2.0.20")
 
-          for i in $(seq 0 $((MAX_ATTEMPTS-1))); do
-            N=$((i+1))
-            log "═══════ ATTEMPT $N / $MAX_ATTEMPTS ═══════"
+          for N in $(seq 1 $MAX); do
+            i=$((N-1))
+            echo "===== ATTEMPT $N / $MAX ====="
 
-            fix_pubspec
+            # Re-run python fix setiap attempt
+            python3 /tmp/fix_syntax.py
 
-            log "📚 flutter pub get..."
-            PUB_OK=false
-            for j in 1 2 3; do
-              if flutter pub get 2>&1 | tee pubget.log; then
-                PUB_OK=true; break
-              fi
-              log "  ❌ pub get gagal (retry $j/3)"
-              fix_pubspec
-              rm -f pubspec.lock
-              sleep 3
-            done
-
-            if grep -q "flutter_launcher_icons:" pubspec.yaml 2>/dev/null; then
-              log "🎨 Generate launcher icons..."
-              flutter pub run flutter_launcher_icons 2>/dev/null || true
-            fi
-
-            fix_android_config
-
+            # Fix AGP/Kotlin di settings
             AGP="${AGP_LIST[$i]:-8.7.0}"
             KT="${KT_LIST[$i]:-2.0.20}"
-            fix_gradle_agp "$AGP" "$KT"
-            fix_gradle_wrapper "$AGP"
-            log "🎯 Using AGP=$AGP Kotlin=$KT"
+            for f in android/settings.gradle android/settings.gradle.kts settings.gradle settings.gradle.kts; do
+              [ -f "$f" ] || continue
+              sed -i -E "s|(id[[:space:]]*\(?[[:space:]]*[\"']com\.android\.application[\"'][[:space:]]*\)?[[:space:]]+version[[:space:]]+)[\"'][0-9.]+[\"']|\1\"${AGP}\"|g" "$f" 2>/dev/null
+              sed -i -E "s|(id[[:space:]]*\(?[[:space:]]*[\"']com\.android\.library[\"'][[:space:]]*\)?[[:space:]]+version[[:space:]]+)[\"'][0-9.]+[\"']|\1\"${AGP}\"|g" "$f" 2>/dev/null
+              sed -i -E "s|(id[[:space:]]*\(?[[:space:]]*[\"']org\.jetbrains\.kotlin\.android[\"'][[:space:]]*\)?[[:space:]]+version[[:space:]]+)[\"'][0-9.]+[\"']|\1\"${KT}\"|g" "$f" 2>/dev/null
+            done
+            for f in android/build.gradle android/build.gradle.kts build.gradle build.gradle.kts; do
+              [ -f "$f" ] || continue
+              sed -i -E "s|com\.android\.tools\.build:gradle:[0-9.]+|com.android.tools.build:gradle:${AGP}|g" "$f" 2>/dev/null
+              sed -i -E "s|org\.jetbrains\.kotlin:kotlin-gradle-plugin:[0-9.]+|org.jetbrains.kotlin:kotlin-gradle-plugin:${KT}|g" "$f" 2>/dev/null
+              sed -i -E "s|ext\.kotlin_version[[:space:]]*=[[:space:]]*[\"'][0-9.]+[\"']|ext.kotlin_version = '${KT}'|g" "$f" 2>/dev/null
+            done
 
-            # ---------- PRE-BUILD SANITY CHECK ----------
-            log "🔍 Sanity check app/build.gradle..."
-            APP="android/app/build.gradle"
-            if [ -f "$APP" ]; then
-              if grep -E 'id[[:space:]]*\(?[[:space:]]*["'"'"'](com\.android|org\.jetbrains)' "$APP" | grep -q "version"; then
-                log "⚠️ Ditemukan 'id ... version' di app/build.gradle — hapus!"
-                sed -i -E "/id[[:space:]]*\(?[[:space:]]*[\"']com\.android\.[^\"']*[\"'][^)]*\)?[[:space:]]+version[[:space:]]+[\"'][0-9.]+[\"']/d" "$APP" || true
-                sed -i -E "/id[[:space:]]*\(?[[:space:]]*[\"']org\.jetbrains\.kotlin[^\"']*[\"'][^)]*\)?[[:space:]]+version[[:space:]]+[\"'][0-9.]+[\"']/d" "$APP" || true
+            # Fix gradle wrapper version
+            MAJOR=$(echo "$AGP" | cut -d. -f1)
+            MINOR=$(echo "$AGP" | cut -d. -f2)
+            case "${MAJOR}.${MINOR}" in
+              8.13) GR="8.14" ;;
+              8.12|8.11) GR="8.13" ;;
+              8.10|8.9) GR="8.11.1" ;;
+              8.8) GR="8.10.2" ;;
+              8.7) GR="8.9" ;;
+              8.6|8.5) GR="8.7" ;;
+              8.4) GR="8.6" ;;
+              8.3) GR="8.4" ;;
+              *) GR="8.13" ;;
+            esac
+            for d in android gradle .; do
+              if [ -d "$d" ] && { [ -f "$d/gradlew" ] || [ -f "$d/gradle/wrapper/gradle-wrapper.properties" ]; }; then
+                mkdir -p "$d/gradle/wrapper"
+                printf '%s\n' \
+                  'distributionBase=GRADLE_USER_HOME' \
+                  'distributionPath=wrapper/dists' \
+                  "distributionUrl=https://services.gradle.org/distributions/gradle-${GR}-all.zip" \
+                  'zipStoreBase=GRADLE_USER_HOME' \
+                  'zipStorePath=wrapper/dists' \
+                  > "$d/gradle/wrapper/gradle-wrapper.properties"
+                chmod +x "$d/gradlew" 2>/dev/null || true
               fi
-              O=$(grep -o "{" "$APP" | wc -l); C=$(grep -o "}" "$APP" | wc -l)
-              log "   Kurawal: $O / $C"
-              if [ "$O" != "$C" ]; then
-                log "❌ Kurawal tidak balance! Log app/build.gradle:"
-                cat "$APP"
-              fi
-            fi
+            done
 
-            # ---------- BUILD ----------
-            log "🔨 Building APK ($MODE) attempt $N..."
+            echo "AGP=$AGP Kotlin=$KT Gradle=$GR"
+
+            # ============================================================
+            # BUILD
+            # ============================================================
             rm -rf build .dart_tool/package_config.json 2>/dev/null || true
 
-            if [ "$MODE" = "release" ]; then
-              flutter build apk --release --no-tree-shake-icons 2>&1 | tee build.log
+            if [ "$PTYPE" = "flutter" ]; then
+              echo "--- Flutter pub get ---"
+              flutter pub get 2>&1 | tail -3
+
+              echo "--- Flutter build ($MODE) ---"
+              if [ "$MODE" = "release" ]; then
+                flutter build apk --release --no-tree-shake-icons 2>&1 | tail -50
+              else
+                flutter build apk --debug 2>&1 | tail -50
+              fi
+
+              if [ -f "build/app/outputs/flutter-apk/app-${MODE}.apk" ] || \
+                 [ -f "build/app/outputs/flutter-apk/app-release.apk" ] || \
+                 [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
+                echo "BUILD SUCCESS attempt $N"
+                SUCCESS=true
+                break
+              fi
             else
-              flutter build apk --debug 2>&1 | tee build.log
+              echo "--- Gradle build ($MODE) ---"
+              TASK="assembleRelease"
+              [ "$MODE" = "debug" ] && TASK="assembleDebug"
+
+              if [ -f gradlew ]; then
+                ./gradlew "$TASK" --no-daemon --console=plain --stacktrace 2>&1 | tail -60
+              else
+                gradle "$TASK" --no-daemon --console=plain 2>&1 | tail -60
+              fi
+
+              APK=$(find . -name "*.apk" -path "*outputs/apk*" 2>/dev/null | head -n1)
+              if [ -n "$APK" ]; then
+                echo "BUILD SUCCESS attempt $N ($APK)"
+                mkdir -p /tmp/out
+                cp "$APK" /tmp/out/app-release.apk
+                SUCCESS=true
+                break
+              fi
             fi
 
-            if [ -f "build/app/outputs/flutter-apk/app-${MODE}.apk" ] || \
-               [ -f "build/app/outputs/flutter-apk/app-release.apk" ] || \
-               [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
-              log "✅ BUILD SUCCESS pada attempt $N!"
-              SUCCESS=true
-              break
-            fi
-
-            log "❌ Build attempt $N gagal, cleaning & retry..."
-            log "────── Error context ──────"
-            grep -B2 -A5 -iE "error|failed|what went wrong|caused by" build.log | head -40 || true
-            log "───────────────────────────"
+            echo "Attempt $N failed, retry..."
             flutter clean >/dev/null 2>&1 || true
-            rm -rf build .dart_tool
-            sleep 3
+            rm -rf build .dart_tool 2>/dev/null || true
+            sleep 2
           done
 
           if [ "$SUCCESS" != "true" ]; then
-            log "❌ SEMUA ATTEMPT GAGAL!"
-            echo ""
-            echo "═══════ BUILD LOG (200 baris terakhir) ═══════"
-            tail -200 build.log
-            echo "═══════ END LOG ═══════"
-            echo ""
-            echo "═══════ APP BUILD.GRADLE ═══════"
-            cat android/app/build.gradle 2>/dev/null || cat android/app/build.gradle.kts 2>/dev/null || echo "(tidak ada)"
-            echo "═══════ SETTINGS.GRADLE ═══════"
-            cat android/settings.gradle 2>/dev/null || cat android/settings.gradle.kts 2>/dev/null || echo "(tidak ada)"
+            echo "ALL ATTEMPTS FAILED"
+            for f in android/app/build.gradle.kts android/app/build.gradle build.gradle.kts build.gradle; do
+              [ -f "$f" ] && { echo "=== $f ==="; head -50 "$f"; echo "=== END ==="; }
+            done
             exit 1
           fi
 
-          ls -la build/app/outputs/flutter-apk/ || true
+          echo "Build finished OK"
 
-      - name: 🔏 Sign APK
-        if: env.build_type == 'release'
+      # ====================================================================
+      # Sign, Collect, Upload
+      # ====================================================================
+      - name: Sign APK
+        if: needs.preflight.outputs.build_type == 'release'
+        shell: bash
         run: |
-          APK=$(find flutter-project/build/app/outputs/flutter-apk -name "*.apk" | head -n1)
-          [ -z "$APK" ] && { echo "❌ APK tidak ada"; exit 1; }
+          if [ "${{ needs.preflight.outputs.project_type }}" = "flutter" ]; then
+            APK=$(find project/build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -n1)
+          else
+            APK=$(find /tmp/out -name "*.apk" 2>/dev/null | head -n1)
+          fi
+          [ -z "$APK" ] && { echo "APK not found"; exit 0; }
           BT=$(ls $ANDROID_HOME/build-tools | sort -V | tail -n1)
-          $ANDROID_HOME/build-tools/$BT/apksigner sign --ks release.keystore --ks-pass pass:password --key-pass pass:password "$APK" || true
-          $ANDROID_HOME/build-tools/$BT/apksigner verify "$APK" || true
+          $ANDROID_HOME/build-tools/$BT/apksigner sign \
+            --ks release.keystore \
+            --ks-pass pass:password \
+            --key-pass pass:password \
+            "$APK" 2>/dev/null || true
 
-      - name: 📦 Collect APK
+      - name: Collect APK
+        shell: bash
         run: |
           mkdir -p output
-          APK=$(find flutter-project/build/app/outputs/flutter-apk -name "*.apk" | head -n1)
-          [ -z "$APK" ] && { echo "❌ APK tidak ditemukan!"; find . -name "*.apk"; exit 1; }
+          if [ "${{ needs.preflight.outputs.project_type }}" = "flutter" ]; then
+            APK=$(find project/build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -n1)
+          else
+            APK=$(find /tmp/out -name "*.apk" 2>/dev/null | head -n1)
+          fi
+          [ -z "$APK" ] && { echo "No APK found"; exit 1; }
           cp "$APK" output/app-release.apk
           ls -la output/
 
-      - name: 📤 Upload APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-release
           path: output/app-release.apk
           retention-days: 1
           if-no-files-found: error
-
-      - name: 📊 Summary
-        if: always()
-        run: |
-          echo "════════════════════════════════════════"
-          echo "Build Type     : ${{ env.build_type }}"
-          echo "Flutter Version: ${{ needs.preflight.outputs.flutter_version }}"
-          echo "Status         : ${{ job.status }}"
-          echo "════════════════════════════════════════"
